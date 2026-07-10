@@ -22,37 +22,56 @@ notes. Out: transcript post-processing (engine-side, issue 23), diarization (ADR
 
 ## Detailed Requirements
 
-1. Lazy import faster_whisper inside methods; `ImportError` →
-   `ProviderNotInstalled DS-PROVIDER-005` hint `uv pip install 'dubstudio[local-asr]'`.
-2. Config (issue 06 `[asr.faster_whisper]`): `model` (default `large-v3-turbo`;
-   accept any CTranslate2 model id/path), `device` (`auto|cpu|cuda`; `auto` = cuda if
-   available else cpu — MPS unsupported by CTranslate2: on darwin `auto`→cpu with a
-   one-line info log), `compute_type` (`auto` → `int8` on cpu, `float16` on cuda).
+1. Import policy: no top-level faster_whisper import (module stays importable without
+   the extra); the **constructor performs the availability check** (importlib.
+   util.find_spec) and raises `ProviderNotInstalled DS-PROVIDER-005` with hint
+   `uv pip install 'dubstudio[local-asr]'`; the actual import happens on first use.
+2. Config (issue 06 `[asr.faster_whisper]`):
+   - `model`: (a) a known alias — `large-v3-turbo` (default), `large-v3`, `medium`,
+     `small`, `tiny` — mapped to pinned `(HF repo, revision)` constants in this
+     module; (b) an explicit `repo_id@revision` string (revision **required** for
+     non-alias ids; missing → `ConfigError DS-CONFIG-001` with example); or (c) an
+     existing local directory path (no download).
+   - `device` (`auto|cpu|cuda`; `auto` = cuda if available else cpu — MPS unsupported
+     by CTranslate2: on darwin `auto`→cpu with a one-line info log).
+   - `compute_type`: `auto` (→ `int8` on cpu, `float16` on cuda) or explicit
+     passthrough value from {`int8`, `int8_float16`, `float16`, `float32`}; anything
+     else → `ConfigError DS-CONFIG-001` listing allowed values.
+   Model integrity (§11.2 B4): downloads resolve through the pinned revision into
+   `user_cache_dir("dubstudio")`; after first download, record
+   `{"<repo>@<revision>": sha256(model.bin)}` in `<user_cache>/models.lock.json`
+   (TOFU) and verify on every later resolve; mismatch → `ProviderError` telling the
+   user to clear the cache entry deliberately. Local-path models skip TOFU.
 3. `capabilities()`: `word_timestamps=True`, `languages="*"`.
 4. `transcribe(audio, language, on_progress)`:
    - `WhisperModel(...).transcribe(str(audio), language=language or None,
      word_timestamps=True, vad_filter=True)`;
    - map segments/words to `RawTranscript` (ms ints, texts stripped; keep
      `avg_logprob`, `no_speech_prob`);
-   - progress callback per segment using `info.duration`;
+   - progress callback per segment: fraction `min(segment.end / info.duration, 1.0)`
+     clamped monotonic (never decreasing), message `f"transcribed {mm:ss}"`; when
+     `info.duration` is missing/0, emit 0.0 once at start and 1.0 at end only;
    - detected language + probability returned in `RawTranscript.language` /
      `.language_confidence`.
-5. Model download: goes through the library's HF cache; provider records
-   `model_dir` + revision into `ProviderInfo.version`; document (docstring +
-   user-docs stub) that models come from official HF repos over TLS into
-   `user_cache_dir` per DESIGN.md §11.2 B4 — no `trust_remote_code`, weights are
-   CTranslate2 format (no pickle execution).
+5. `ProviderInfo.version` format (exact): `faster-whisper/<lib_version>/<model-id>`
+   where `<model-id>` is `<alias-or-repo>@<revision>` for downloaded models and
+   `local:<sha256(model.bin)[:12]>` for local paths. Docstring + user-docs stub state
+   the §11.2 B4 posture: official HF repos over TLS, pinned revisions, TOFU hash
+   verification, no `trust_remote_code`, CTranslate2 weights (no pickle execution).
 6. `healthcheck()`: imports lib, resolves device, loads model metadata (no inference),
    reports model resolved/downloaded state.
 7. `estimate_cost` returns None (local/free).
 
 ## Acceptance Criteria
 
-- [ ] Without the extra installed, constructing the provider raises DS-PROVIDER-005
-      with the exact install hint.
+- [ ] Without the extra installed (find_spec mocked to None), constructing the
+      provider raises DS-PROVIDER-005 with the exact install hint.
 - [ ] Unit tests (faster_whisper module mocked): timestamp mapping s→ms exact;
       `language="auto"` passes None to the lib; vad_filter and word_timestamps flags
-      set; darwin device fallback logs info and uses cpu.
+      set; darwin device fallback logs info and uses cpu; compute_type rejection for
+      `int4`; non-alias model without `@revision` rejected; TOFU mismatch raises with
+      the cache-clear guidance; version string format for all three model-source
+      modes.
 - [ ] Live-marked test (`-m live`, local model `tiny`): fixture speech WAV transcribes
       to non-empty segments with monotonic word timestamps.
 - [ ] `providers list` row shows mode=local, extra status.

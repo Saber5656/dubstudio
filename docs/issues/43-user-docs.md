@@ -35,7 +35,11 @@ the ja quickstart.
    / `.env`), extras install line, model download size/location, cost model pointer,
    capability notes (watermark for Chatterbox per ADR-005; ElevenLabs IVC tier
    requirement; timestamps caveat from U-01 as verified in I15; ja-quality note from
-   U-02 as evaluated in I18).
+   U-02 as evaluated in I18). A dedicated **third-party plugins** section documents
+   `providers.enabled_plugins`, the explicit enable-by-name rule, and the §11.2 B5
+   trust warning verbatim in spirit: installing and enabling a plugin runs its code
+   in-process with access to your media and API keys — only enable plugins whose
+   authors you trust.
 3. `docs/guide/workflow.md`: the review loop — `run --until translate`, editing via
    `segments export/import` (schema documented with an annotated example), the UI
    flow (launch, edit, re-synth, run), staleness mental model (§6.2 in user terms:
@@ -60,7 +64,10 @@ the ja quickstart.
 ## Acceptance Criteria
 
 - [ ] Quickstart executed verbatim by the implementer on a clean macOS and Linux env
-      (mock or real tiny video) — evidence (terminal transcript) in PR.
+      (mock or real tiny video) — evidence (terminal transcript) in PR. (The
+      full-scale dogfood test on a real ~5-min video is **not** this issue's gate:
+      it lives in the release checklist, issue 42, per ISSUE_PLAN §6.6.)
+- [ ] Plugin-trust section present with the B5 warning and enabled_plugins example.
 - [ ] JA quickstart is a faithful full translation (not summary).
 - [ ] Config-reference and troubleshooting freshness tests green and wired into CI.
 - [ ] Providers page includes the B2 data-disclosure table for all 7 providers.
@@ -74,7 +81,9 @@ CI freshness tests + PR checklist with transcripts; one external-reader review p
 
 ## Dependencies
 
-31, 32, 33, 39 (12, 11 content), 03.
+Hard: 31, 32, 33, 39 (matches the ISSUE_PLAN row). Content inputs (soft, already
+merged well before wave 6): 03 (POLICY/README base), 11 (consent semantics),
+12 (doctor output shown in quickstart).
 
 ## Non-goals
 

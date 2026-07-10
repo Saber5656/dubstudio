@@ -29,10 +29,11 @@ voice_ref stage (25), UI PATCH equivalent (36).
    with timing context for editors. Refuses when `translate:<lang>` not completed
    (`DS-STAGE-001` "run translate first").
 2. `segments import --lang L --from F [--dry-run]`:
-   - validates: parses via model, project_id match, lang match, all ids ∈ current
-     translation doc (unknown/missing ids → itemized `ConfigError DS-CONFIG-006`; a
-     subset of segments is allowed — missing ids mean "unchanged"), text non-empty,
-     status ∈ enum;
+   - validates: parses via model, project_id match, lang match, text non-empty,
+     status ∈ enum. Id rules (exact): an id in the file that does **not** exist in
+     the current translation doc → rejected (itemized `ConfigError DS-CONFIG-006`);
+     a duplicate id within the file → rejected (itemized); a current-doc id
+     **omitted** from the file → allowed, means "unchanged";
    - diff report: per changed segment old→new text (truncated 60 chars) and status
      changes; `--dry-run` stops here;
    - apply: changed text → status `edited` (unless file explicitly sets `approved`),
@@ -43,9 +44,14 @@ voice_ref stage (25), UI PATCH equivalent (36).
 3. `voice show`: current mode, reference file/provenance summary from
    `reference.json` (spans count, total seconds, built_at) or "not built".
 4. `voice set --ref F`: validates file per §5.5 rules (via voice_ref validation
-   helper), sets `manifest.voice = {mode:"user", user_ref_path}`, invalidates
-   `voice_ref` (cascade). `voice auto`: sets mode auto + invalidate.
-5. `invalidate --stage S [--lang L] [--cascade/--no-cascade] | --input`:
+   helper), **resolves F to a canonical absolute path at command time**
+   (`Path(F).expanduser().resolve()`) before storing
+   `manifest.voice = {mode:"user", user_ref_path:<absolute>}` (a relative path
+   stored from an arbitrary CWD would resolve differently later — §11.2 B6),
+   invalidates `voice_ref` (cascade). `voice auto`: sets mode auto + invalidate.
+5. `invalidate --stage S [--lang L] [--cascade/--no-cascade] | --input`
+   (**default `--cascade`**, matching issue 10's `cascade=True`; `--no-cascade`
+   marks only the selected stage):
    maps to engine APIs (10); when target includes `synthesize` and the last synth doc
    holds a `provider_voice_id`, call the TTS provider's `cleanup_voice` (best-effort:
    failures log a warning with manual cleanup hint, never block) before marking stale
@@ -71,7 +77,9 @@ voice_ref stage (25), UI PATCH equivalent (36).
 
 ## Dependencies
 
-24, 25, 10, 31 (plumbing), 17 (cleanup contract; mock in tests).
+24, 25, 10, 26 (synth.json header contract for voice cleanup), 31 (plumbing) —
+matches the ISSUE_PLAN row; `cleanup_voice` interface comes from 13 (17 mocked in
+tests).
 
 ## Non-goals
 

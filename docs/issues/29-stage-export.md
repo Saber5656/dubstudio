@@ -23,16 +23,26 @@ files (30 — consumed when embedding).
 ## Detailed Requirements
 
 1. `Stage` `name="export"`, per-lang, deps `["mix:<lang>"]` (+ `subtitles:<lang>` when
-   `export.embed_subtitles`); `config_subset` = `[export]`.
+   `export.embed_subtitles`); `config_subset` = `[export]`. All mux and verification
+   probes go exclusively through issue 07 helpers (`mux`, `probe`) over `procs.run`
+   (argv lists, project cwd, env allowlist, media timeout — §11.3); every input and
+   output path resolves through the store registry under the project root (§11.2
+   B6).
 2. Container/codec matrix: output container = `export.container` or input container;
    audio codec AAC 192k (mp4/mov) / Opus 128k (mkv/webm); video `-c:v copy` always.
    Mux failure (incompatible codec/container combos) → `DS-MEDIA-005` with hint
    `export.container = "mkv"` (§5.9).
-3. Tracks: dubbed audio = track 1, disposition default, language tag = target;
-   `keep_original_audio` → original audio re-muxed (stream copy from input) as track
-   2, non-default, source-language tag; `embed_subtitles` → source+target subtitle
-   files as soft tracks (mov_text for mp4, srt codec for mkv; webm → warning that
-   subtitles are skipped, sidecars only).
+3. Expected output stream layout (exact, verified by the req 7 probe):
+   - stream 0: copied video (when `has_video`);
+   - stream 1: dubbed audio, disposition `default`, language tag = target;
+   - stream 2: original audio (only when `keep_original_audio`, stream-copied from
+     the selected input audio stream), non-default, source-language tag;
+   - then subtitle streams (only when `embed_subtitles=true`): **target first**
+     (`subtitles/<lang>/<lang>.srt`), then source (`subtitles/<src>.srt`) — SRT
+     sidecars are the embedding source (VTT stays sidecar-only); codec mov_text for
+     mp4/mov, srt for mkv; webm → documented warning, no subtitle streams. A
+     missing sidecar despite `embed_subtitles=true` → `StageError DS-STAGE-001`
+     (subtitles stage not completed).
 4. Audio-only projects (`has_video: false` in probe.json, §5.1): output
    `<basename>.<lang>.dub.m4a` (AAC) instead; no video muxing.
 5. Metadata (§11.4): container-level tags —
@@ -65,7 +75,8 @@ files (30 — consumed when embedding).
 
 ## Dependencies
 
-28, 07, 11 (snapshot semantics), 30 (when embedding).
+28, 11 (snapshot semantics), 07 (mux/probe builders), 30 when `embed_subtitles` —
+matches the ISSUE_PLAN row.
 
 ## Non-goals
 

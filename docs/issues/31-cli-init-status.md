@@ -30,23 +30,36 @@ Out: run/plan (32), segments/voice/invalidate (33), doctor (12), consent (11), u
    - DIR default = input basename stem; refuses existing non-empty dir
      (DS-CONFIG-002);
    - validates input via probe before creating anything (fail → nothing written);
-   - lang args validated (BCP-47 primary subtag); source==target → UsageError;
+   - lang args validated and normalized **via issue 06's `normalize_lang` semantics
+     exactly** (so `EN` → `en`, `en-US` accepted); `source == target` compared
+     after normalization → UsageError;
    - delegates to `ProjectStore.create` (09); prints a next-steps block: consent
      status hint (if missing), provider/key readiness summary (from registry
      `list_all`), and `dubstudio run`;
    - warns (not fails) when selected providers lack keys/extras.
 3. `status [--json]`: renders the manifest stage table — rows per stage (per-lang
-   grouped), status glyphs, fingerprint freshness (calls engine `evaluate`, marking
-   would-be-stale rows), last error code+message, warnings summary from the latest
-   run log (fit overflow count, overrun chars), and a "next action" line (first
-   pending/stale stage → suggested command). `--json`: statuses + evaluation + next
-   action in a stable schema.
+   grouped), status glyphs, fingerprint freshness (calls engine `evaluate` per
+   DESIGN §6.1–6.2, marking would-be-stale rows), last error code+message, a
+   warnings summary, and a "next action" line (first pending/stale stage →
+   suggested command). Warnings are derived **from artifacts, not run logs**
+   (deterministic): fit overflow/shortened counts from each `fit_report.json`;
+   over-budget counts computed from each translation doc (`len(text) >
+   char_budget`). Missing artifacts → that summary line is omitted.
+   `--json` schema (exact):
+   `{"project": str, "languages": {"source": str, "targets": [str]},
+   "stages": [{"key": str, "status": str, "evaluated": "up_to_date|pending|stale|
+   failed|blocked|skipped", "finished_at": str|null, "error": {"code": str,
+   "message": str}|null}], "warnings": {"fit_overflow": {"<lang>": int},
+   "over_budget": {"<lang>": int}}, "next_action": str|null}`.
 4. `config show [--json]`: effective merged config (issue 06) with provenance
    annotation per key group (default/user/project/env) in human mode; secrets never
-   present by construction (§8.3).
-5. `providers list [--json]`: registry `list_all` rows (name, kind, mode,
-   builtin/plugin, enabled, key set?, extra installed?, watermark for tts, languages
-   summary).
+   present by construction (§8.3). `--json`: `{"config": <effective model dump>,
+   "provenance": {"<table>": "default|user|project|env|mixed"}}`.
+5. `providers list [--json]`: registry `list_all` rows. `--json`: `{"providers":
+   [{"name": str, "kind": str, "mode": "local|cloud", "origin": "builtin|plugin",
+   "enabled": bool, "selected": bool, "key_env_set": bool|null, "extra_installed":
+   bool|null, "watermark_builtin": bool|null, "languages": "…"|null}]}` (null =
+   not applicable / unknown-until-loaded for disabled plugins).
 
 ## Acceptance Criteria
 
@@ -65,12 +78,13 @@ Out: run/plan (32), segments/voice/invalidate (33), doctor (12), consent (11), u
 
 ## Validation
 
-`uv run pytest tests/cli/test_init.py test_status.py test_config_show.py
-test_providers_list.py` via `typer.testing.CliRunner`.
+`uv run pytest tests/cli/test_init.py tests/cli/test_status.py
+tests/cli/test_config_show.py tests/cli/test_providers_list.py` via
+`typer.testing.CliRunner`.
 
 ## Dependencies
 
-09, 07, 13, 06, 10 (evaluate for status).
+06, 07, 09, 10 (`evaluate` for status), 13 — matches the ISSUE_PLAN row.
 
 ## Non-goals
 
@@ -78,4 +92,4 @@ Interactive init wizard, project migration, editing config via CLI.
 
 ## Design References
 
-DESIGN.md §9, §4.1, §8, §12.
+DESIGN.md §9, §6.1–6.2 (status semantics), §4.1, §8, §12.

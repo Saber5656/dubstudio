@@ -24,9 +24,15 @@ Out: server foundation (34), read routes (35), frontend consumption (37/38).
 
 ## Detailed Requirements
 
+0. Route-param validation (all routes in this issue, before any store access —
+   §11.2 B6): segment ids must match `^seg_\d{4}$`, `lang` must be one of the
+   manifest targets; violations → stable 422 JSON error. **Every PATCH/POST route
+   requires the `X-Dubstudio-Csrf` header** per §10.2 (the issue 34 middleware
+   enforces it; this issue adds a per-route negative test so a routing mistake
+   cannot bypass it).
 1. `PATCH /api/segments/{id}?lang=L` body `{text?: str, status?: enum}` (≥ 1 field):
    - validation identical to `segments import` single-segment rules (33/B6): id
-     exists, text non-empty, status enum;
+     exists in the doc, text non-empty, status enum;
    - text change → status `edited` (unless body sets `approved` explicitly), doc
      written atomically under the project lock, per-segment invalidation (§6.2);
    - 409 with `{error:{code:"DS-LOCK-001"}}` when a job/run holds the lock;
@@ -44,19 +50,28 @@ Out: server foundation (34), read routes (35), frontend consumption (37/38).
 4. `POST /api/segments/{id}/resynthesize?lang=L`: shorthand creating a job that runs
    synthesize+fit restricted to that segment (engine per-segment invalidation +
    filtered run); same 409 rules.
-5. `POST /api/jobs/{id}/cancel`: `runner.cancel()` semantics (§6.1 rollback); idempotent.
+5. `GET /api/jobs/{id}`: returns the registry object `{id, state, started_at,
+   finished_at, error?, summary?}`; unknown id → stable 404 JSON error.
+   `POST /api/jobs/{id}/cancel`: `runner.cancel()` semantics (§6.1 rollback);
+   idempotent (cancelling a finished job is a no-op 200).
 6. `GET /api/events` (SSE, §10.3): subscribes to the in-process event bus; emits
    `event: <RunEvent.event>` + `data: <RunEvent JSON>`; 15 s `: heartbeat` comments;
    on connect, replays the current job's `stage_started`-to-now tail (last 100
    events) so late-joining clients render state; client disconnect detection stops
    the generator. CSRF not required (GET), cookie required (34 middleware).
-7. All mutations emit events (segment_updated custom event added to §6.5 enum —
-   extend `model/events.py` accordingly with a doc note).
+7. All mutations emit events; segment edits emit the `segment_updated` event, which
+   DESIGN.md §6.5 defines as part of the event enum (issue 08's `RunEvent` enum
+   includes it — no ad-hoc extension here).
 
 ## Acceptance Criteria
 
 - [ ] PATCH matrix: text-only (→edited), status-only, both, empty body (422), bad id
-      (422), unknown lang (422), during active job (409 lock).
+      format (422 before store access), unknown lang (422), during active job (409
+      lock).
+- [ ] CSRF negative test per mutating route (PATCH segments, resynthesize, run,
+      cancel): valid cookie without the header → 403.
+- [ ] `GET /api/jobs/{id}`: known id returns the registry shape; unknown id → 404
+      JSON error.
 - [ ] PATCH → exactly one segment stale in synthesize (engine assertion, mirrors 33).
 - [ ] Second `POST /api/run` while active → 409; after completion → accepted.
 - [ ] Consent-missing run → 409 with DS-CONSENT-001 payload; cost 409 carries
@@ -69,12 +84,12 @@ Out: server foundation (34), read routes (35), frontend consumption (37/38).
 
 ## Validation
 
-`uv run pytest tests/ui/test_mutation_api.py test_jobs.py test_sse.py` (stub engine +
-mock providers; no real media needed).
+`uv run pytest tests/ui/test_mutation_api.py tests/ui/test_jobs.py
+tests/ui/test_sse.py` (stub engine + mock providers; no real media needed).
 
 ## Dependencies
 
-34, 35, 10, 33 (shared validation rules), 11.
+34, 35, 10, 33 (shared validation rules), 11 — matches the ISSUE_PLAN row.
 
 ## Non-goals
 

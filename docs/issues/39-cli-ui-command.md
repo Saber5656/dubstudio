@@ -47,8 +47,11 @@ In: the command + lifecycle. Out: server internals (34–38).
 ## Acceptance Criteria
 
 - [ ] Subprocess test: launch with `--no-browser --port 0`, parse the printed URL,
-      complete the handshake (200 + cookie), hit `/api/project` 200, SIGINT →
-      exit 0, port released.
+      complete the handshake (`/?token=…` → 303 with Set-Cookie, then `/` → 200 with
+      the client following redirects), hit a served route 200, SIGINT → exit 0,
+      port released.
+- [ ] SIGTERM → graceful shutdown exit 0 within the 5 s grace window; SIGINT twice
+      in quick succession → forced exit 10.
 - [ ] Token appears exactly once in stdout and never in the JSONL log (scan test).
 - [ ] Explicit busy port → exit 12 with the named port; port 0 works.
 - [ ] `--no-browser` verified (webbrowser mocked in unit test; subprocess test uses
@@ -61,7 +64,8 @@ In: the command + lifecycle. Out: server internals (34–38).
 
 ## Dependencies
 
-34 (35–38 for a useful UI; command itself only needs 34), 31 plumbing.
+34, 31 (CLI plumbing: `--project`, error rendering) — matches the ISSUE_PLAN row;
+35–38 make the UI useful but are not build-order prerequisites.
 
 ## Non-goals
 

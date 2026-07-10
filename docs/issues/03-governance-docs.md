@@ -17,8 +17,10 @@ the policy/licensing scaffolding to exist before any provider or synthesis code 
 
 ## Scope
 
-In: the seven documents below, in English (README gets a short Japanese companion).
-Out: user guides/quickstart details (issue 43), consent gate implementation (issue 11).
+In: the **eight** documents below — `LICENSE`, `NOTICE`, `README.md`, `README.ja.md`,
+`CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `docs/POLICY.md` — in English
+(README gets a Japanese companion). Out: user guides/quickstart details (issue 43),
+consent gate implementation (issue 11).
 
 ## Detailed Requirements
 
@@ -47,19 +49,25 @@ Out: user guides/quickstart details (issue 43), consent gate implementation (iss
    (impersonation, fraud, harassment, deception about a real person's speech); a
    consent-affirmation sentence exactly matching DESIGN.md §11.4 (the consent gate
    displays this string verbatim); reporting/abuse contact; note that policy version
-   bumps re-trigger the consent gate.
+   bumps re-trigger the consent gate; and a `## Version history` section (one bullet
+   per policy_version with date and change summary — the stable anchor the consent
+   gate's outdated-policy prompt links to, issue 11).
 
 ## Acceptance Criteria
 
-- [ ] All seven files exist with the required content and render cleanly on GitHub.
-- [ ] POLICY.md contains `policy_version: 1` and the exact §11.4 affirmation sentence.
+- [ ] All eight files exist with the required content and render cleanly on GitHub.
+- [ ] POLICY.md contains `policy_version: 1` and, verbatim, the DESIGN.md §11.4
+      affirmation sentence (grep-verified against DESIGN.md in this PR; the
+      code-constant equality test is issue 11's deliverable).
 - [ ] README responsible-use section links to POLICY.md; README.ja.md links back.
-- [ ] `gh repo view` shows license detected as Apache-2.0.
+- [ ] LICENSE is the unmodified Apache-2.0 text (diff against the canonical text);
+      GitHub license auto-detection is confirmed post-merge in the PR follow-up
+      comment (not a pre-merge gate).
 
 ## Validation
 
-Manual render check on GitHub; markdown lint (CI lint job) passes; grep the affirmation
-sentence to confirm exact match with the string constant later used by issue 11.
+Manual render check on GitHub; markdown lint (CI lint job) passes; grep the §11.4
+affirmation sentence in both DESIGN.md and POLICY.md and confirm byte equality.
 
 ## Dependencies
 
@@ -71,4 +79,5 @@ Full user documentation (43), release checklist (42), translations beyond ja sum
 
 ## Design References
 
-DESIGN.md §1, §2.1, §11.4; ADR-005, ADR-007.
+DESIGN.md §1, §2.1, §11.2 B1 (SECURITY.md media-boundary note), §11.4; ADR-005,
+ADR-007.

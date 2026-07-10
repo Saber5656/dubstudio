@@ -27,26 +27,48 @@ work (24/26 expose `retranslate_segment` / single-segment synth used here), mixi
 
 1. `Stage` `name="fit"`, per-lang, deps `["synthesize:<lang>"]`; `config_subset` =
    `[fit]`.
-2. Pure planner `plan_fit(slot_ms, gap_to_next_ms, synth_ms, cfg) -> FitDecision`
-   implementing §5.7 exactly:
-   - `available_ms = slot_ms + min(gap_to_next_ms × 0.8, cfg.max_bleed_ms)`;
-   - ratio ≤ 1 → `keep` (pad tail to slot_ms; if synth > slot but ≤ available:
-     no pad, overrun recorded);
-   - 1 < ratio ≤ atempo_max → `atempo(ratio)`;
-   - ratio > atempo_max → `shorten` (eligible) else `overflow`
-     (atempo_max applied, `overrun_ms = synth_ms/atempo_max − available_ms`).
-3. Auto-shorten path (once per segment, only when `fit.auto_shorten` and translation
-   status == `draft`): call `retranslate_segment(..., char_budget × 0.8)` (issue 24) →
-   single-segment synthesize via the synthesize stage's exported helper (cache-aware) →
-   re-plan; if still over → overflow handling; translation doc updated with the
-   shortened text (status stays `draft`), synth doc updated; result `shortened`.
-4. Apply decisions with issue 07 primitives (`atempo`, pad via `silence`+`concat`);
-   fitted output per segment under `fit/<lang>/segments/`; per-segment cache key =
-   synth entry hash + fit-relevant config + neighbor gap (re-fit only what changed).
+2. Pure planner `plan_fit(slot_ms, bleed_room_ms, synth_ms, cfg) -> FitDecision`
+   implementing §5.7 exactly. The **caller** computes `bleed_room_ms`: for non-final
+   segments, `next.start_ms − end_ms`; for the final segment,
+   `media_duration_ms − end_ms − 200`. `FitDecision` = frozen dataclass
+   `{action: Literal["keep","atempo","shorten_candidate","overflow"],
+   atempo: float, pad_ms: int, overrun_ms: int}`. Rules, with
+   `available_ms = slot_ms + min(max(bleed_room_ms, 0) × 0.8, cfg.max_bleed_ms)` and
+   `ratio = synth_ms / available_ms`:
+   - **short audio** (ratio ≤ 1): `atempo = clamp(ratio, cfg.atempo_min, 1.0)` —
+     very short synth is slowed at most to `atempo_min` (default 0.9, ≈ 1.11×
+     stretch) toward the slot; when `0.98 ≤ ratio ≤ 1.0` skip the tempo filter
+     entirely (imperceptible; avoids a pointless re-encode). Remainder padded with
+     tail silence to slot_ms; action `keep` when no tempo applied, else `atempo`;
+   - 1 < ratio ≤ `cfg.atempo_max` (default 1.15) → action `atempo` with
+     `atempo = ratio` (fills available exactly; `overrun_ms = max(fitted − slot,
+     0)` recorded);
+   - ratio > atempo_max → action `shorten_candidate` with
+     `overrun_ms = synth_ms/cfg.atempo_max − available_ms` (the planner knows
+     nothing of translation status or auto_shorten config — see req 3);
+   - the planner never truncates audio.
+3. Shorten/overflow resolution (stage code, not planner): on `shorten_candidate`,
+   if `fit.auto_shorten=true` (default) **and** the segment's translation status ==
+   `draft` → one re-translate pass via `retranslate_segment(ctx, lang, id,
+   char_budget × 0.8)` (issue 24) → single-segment re-synthesis via the synthesize
+   stage's exported helper (cache-aware) → re-plan **once**; if the re-plan still
+   yields `shorten_candidate`, or the segment was never eligible → overflow
+   handling: apply `atempo_max`, allow overrun into the bleed room, result
+   `warn_overflow` (fitted end colliding with the next segment's start → collision
+   warning with overlap ms). Eligible-and-improved path records result `shortened`;
+   translation doc updated with the shortened text (status stays `draft`), synth
+   doc updated.
+4. Apply decisions with issue 07 primitives only (`atempo`, pad via
+   `silence`+`concat` — list-argv subprocesses, no shell, §11.3); all input synth
+   paths and fitted outputs resolve through the store registry
+   (`segment_art`, ids validated `^seg_\d{4}$`, everything under
+   `fit/<lang>/segments/` — §11.2 B6); per-segment cache key =
+   synth entry hash + fit-relevant config + neighbor bleed_room (re-fit only what
+   changed).
 5. Collision detection: fitted end (slot start + fitted duration) > next segment's
    start_ms → warning event `data={overlap_ms}` (§5.7).
-6. Edge rules: last segment may bleed to `media_duration − 200 ms`; segment 0 start
-   preserved.
+6. Edge rules: final-segment bleed room per the planner input rule (req 2);
+   segment 0 start preserved.
 7. `fit_report.json` per issue 08 `FitEntry` for every segment (including clean `ok`
    ones), plus summary counts in the stage-completed event
    (`{ok, shortened, warn_overflow}`).
@@ -54,8 +76,10 @@ work (24/26 expose `retranslate_segment` / single-segment synth used here), mixi
 ## Acceptance Criteria
 
 - [ ] `plan_fit` table-driven tests hit every branch incl. boundary ratios (exactly
-      1.0, exactly atempo_max) and bleed capping; property test: fitted duration ≤
-      available_ms + 1 ms for non-overflow results.
+      1.0, exactly atempo_max, 0.98 no-op band, ratio below atempo_min → slow-down
+      floored at atempo_min + padding, negative bleed_room clamped to 0) and bleed
+      capping; final-segment bleed rule tested via the caller-computed input;
+      property test: fitted duration ≤ available_ms + 1 ms for non-overflow results.
 - [ ] Auto-shorten happy path (mock MT returns shorter text): result `shortened`,
       translation doc updated, synth cache invalidated for that id only.
 - [ ] `edited` segment never auto-shortened (goes straight to overflow when over).
@@ -69,7 +93,7 @@ work (24/26 expose `retranslate_segment` / single-segment synth used here), mixi
 
 ## Dependencies
 
-26 (24 for retranslate helper), 07, 10.
+26, 24 (retranslate helper), 07 — matches the ISSUE_PLAN row (10 transitive).
 
 ## Non-goals
 

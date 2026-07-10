@@ -26,6 +26,14 @@ Out: engine semantics (10), stage behavior (21–30).
 1. Argument mapping to engine planner: `--until S`, `--only S`, `--from S`
    (mutually exclusive trio → UsageError), `--target L` (repeatable; must ⊆ manifest
    targets), `--dry-run`. `plan` command = `run --dry-run` alias.
+   Stage arguments accept **base stage names only** (`ingest`, `separate`,
+   `transcribe`, `translate`, `voice_ref`, `synthesize`, `fit`, `mix`, `export`,
+   `subtitles`) — never keyed forms like `translate:en`; languages are selected via
+   `--target`. Unknown stage → UsageError listing valid names. Planner semantics are
+   exactly issue 10's filter rules (e.g. `run --until translate --target en` plans
+   ingest→separate→transcribe→translate:en; `run --only synthesize` on a
+   two-target project plans synthesize:en and synthesize:de, erroring per issue 10
+   when deps are unmet).
 2. Plan rendering (dry-run and pre-run header): ordered stage list with reason
    (pending/stale/failed), per-stage `[cloud]` badge (§11.5), per-stage cache summary
    ("12/40 segments cached"), aggregate cost estimate with breakdown lines and the
@@ -35,17 +43,22 @@ Out: engine semantics (10), stage behavior (21–30).
    `CostConfirmationRequired DS-COST-001` exit 11; `--yes` skips. Estimate `None`
    (unknown) counts as 0 but renders "unknown" and never triggers the gate (documented
    behavior).
-4. `--require-approved`: before planning synthesize stages, fail (exit 9,
-   `DS-STAGE-009`) listing non-`approved` segment ids per language (§4.3).
+4. `--require-approved`: before executing, for every planned `synthesize:<lang>`,
+   check that language's translation doc: missing doc → fail (exit 9,
+   `DS-STAGE-009`) with "translations not generated yet — run `dubstudio run
+   --until translate` and review first"; existing doc with non-`approved` segments →
+   fail listing those ids per language (§4.3). The check runs pre-execution so
+   nothing partial happens.
 5. Progress: rich `Progress` — one task line per running stage (percentage from
    `stage_progress` events; segment counters for synthesize/fit from
    `segment_completed`), warnings streamed beneath (overflow, overrun, collisions),
    quiet mode = final summary only. Non-TTY: line-per-event plain logs (no control
    codes).
 6. Run summary block on completion/failure: per-stage durations, segments synthesized
-   (cached/new), actual usage from `cost_estimate`/usage events, fit result counts,
-   output paths (export/subtitles), and — on failure — the §12-rendered error + next
-   action.
+   (cached/new), actual usage and fit result counts from the `run_completed` /
+   `run_failed` event's `data` payload (issue 10's runner aggregates them there —
+   §6.5/§7.6; no separate "usage" event type exists), output paths
+   (export/subtitles), and — on failure — the §12-rendered error + next action.
 7. SIGINT: first Ctrl-C → `runner.cancel()` + "finishing current segment…" notice;
    second → hard exit 10 (after best-effort lock release via context managers).
 8. Interactive consent trigger: when a planned stage requires consent and status is
@@ -73,7 +86,8 @@ manual full run against mock providers.
 
 ## Dependencies
 
-10, 13, 11, 31 (shared plumbing); behavioral completeness with 21–30.
+10, 13, 11 (plan-time consent), 31 (shared plumbing) — hard; behavioral completeness
+with 21–30. ISSUE_PLAN row matches.
 
 ## Non-goals
 

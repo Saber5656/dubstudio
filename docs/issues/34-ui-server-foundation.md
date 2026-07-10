@@ -23,9 +23,13 @@ Out: business routes (35/36), browser launch UX (39).
 
 ## Detailed Requirements
 
-1. `create_app(project_root, token: str) -> FastAPI`; uvicorn bound to `127.0.0.1`
-   only, port from `ui.port` (0 = ephemeral, actual port reported to caller); binding
-   is not configurable beyond port (ADR-004).
+1. `create_app(store: ProjectStore, token: str) -> FastAPI` (the caller — issue 39 —
+   opens the store and reads `ui.port` from config), plus the runner helper this
+   issue also owns: `run_ui_server(app, port: int) -> BoundServer` — builds a
+   uvicorn `Server` bound to **`127.0.0.1` only** (host not parameterizable —
+   ADR-004), binds the socket eagerly (port 0 = ephemeral) and exposes
+   `BoundServer.port` (the resolved port), `.serve()` (blocking) and
+   `.shutdown(grace_s=5)`.
 2. Handshake (§10.2): `GET /?token=<t>` — constant-time compare; valid → set cookie
    `dubstudio_session=<t>` (HttpOnly, SameSite=Strict, Path=/; no Secure flag —
    http://127.0.0.1) → 303 redirect to `/`; invalid/absent token without cookie →
@@ -38,11 +42,16 @@ Out: business routes (35/36), browser launch UX (39).
    Applies to every request including the handshake.
 5. Security headers on all responses: `Content-Security-Policy: default-src 'self';
    img-src 'self' data:; media-src 'self' blob:`, `X-Content-Type-Options: nosniff`,
-   `Referrer-Policy: no-referrer`, `Cache-Control: no-store` (API routes). No CORS
-   headers ever.
+   `Referrer-Policy: no-referrer`. Caching: `Cache-Control: no-store` on `/api/*`;
+   `Cache-Control: no-cache` (revalidate) on `/` and `/static/*`. No CORS headers
+   ever.
 6. Static serving: `/` (index.html) and `/static/*` from packaged
-   `dubstudio/ui/static/` (importlib.resources); correct content types; no directory
-   listing; unknown paths → index? No — 404 (no SPA fallback needed; single page).
+   `dubstudio/ui/static/` (importlib.resources); correct content types; no
+   directory listing; unknown paths → 404 (single-page app, no SPA fallback).
+   `index.html` is served as a template with the placeholder `__CSRF__` replaced by
+   the session token at response time, rendered as `<meta name="csrf"
+   content="…">` — this is the documented hook the frontend (issues 37/38) reads to
+   set `X-Dubstudio-Csrf` (the cookie itself is HttpOnly and unreadable by JS).
 7. Error shape: all HTTP errors JSON `{error: {code, message}}` except the 401
    handshake HTML; unexpected exceptions → 500 with generic message (details only in
    server log, redaction filter active).
@@ -52,18 +61,22 @@ Out: business routes (35/36), browser launch UX (39).
 
 ## Acceptance Criteria
 
-Negative tests via TestClient (all must fail closed):
-- [ ] No cookie → 401 on `/api/*`; wrong token in handshake → 401 without echo.
+Auth/CSRF matrix is exercised against a **test-only probe router** (`GET/POST
+/api/_probe`, mounted only inside `tests/ui/test_server_foundation.py` via
+`create_app`'s returned app — business routes arrive in issues 35/36):
+- [ ] No cookie → 401 on `/api/_probe`; wrong token in handshake → 401 without echo.
 - [ ] Valid cookie but missing/wrong CSRF header on POST → 403; GET without CSRF → 200.
 - [ ] `Host: evil.example` → 421 even with valid cookie (rebinding proof).
-- [ ] CSP/nosniff/no-store headers present on `/` and `/api/*`; no
-      `Access-Control-Allow-*` anywhere.
+- [ ] CSP/nosniff headers on `/` and `/api/_probe`; `no-store` on `/api/_probe`,
+      `no-cache` on `/`; no `Access-Control-Allow-*` anywhere.
 - [ ] `/static/../pyproject.toml` style traversal → 404 (packaged-resources access
       cannot escape).
 - [ ] Cookie flags: HttpOnly + SameSite=Strict asserted.
+- [ ] Served `/` contains `<meta name="csrf" content="<token>">` exactly once.
 Positive:
-- [ ] Handshake sets cookie + redirects; subsequent API GET 200.
-- [ ] Ephemeral port (0) reports the bound port to the caller.
+- [ ] Handshake sets cookie + redirects; subsequent probe GET 200.
+- [ ] `run_ui_server` with port 0 exposes the real bound port; bind address is
+      127.0.0.1 (socket assertion).
 
 ## Validation
 
@@ -72,7 +85,7 @@ socket test asserting the bind address is 127.0.0.1).
 
 ## Dependencies
 
-06, 09 (store open), 05.
+05, 06, 09 (store type in the app state) — matches the ISSUE_PLAN row.
 
 ## Non-goals
 
@@ -81,4 +94,5 @@ token model.
 
 ## Design References
 
-DESIGN.md §10.1–10.2, §11.2 B3; ADR-004.
+DESIGN.md §10.1–10.2, §11.2 B3;
+`docs/decisions/ADR-004-local-first-security-posture.md`.

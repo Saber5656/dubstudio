@@ -35,18 +35,25 @@ cost prompt UX (engine exposes estimate; issue 32 prompts).
    - segment length: any text > provider `max_chars_per_request` → `DS-STAGE-007`
      listing offending ids and hinting to edit/split those translations (v1 does not
      auto-split synthesis text).
-3. Voice preparation: `VoiceReference{path: reference.wav, voice_hash:
-   sha256(reference.wav bytes + provider name)}`; reuse stored
-   `provider_voice_id` from previous `synth.json` header when voice_hash matches;
-   else `prepare_voice` and persist the mapping.
+3. Voice preparation: `voice_hash = sha256(reference.wav bytes)` (reference identity
+   only — provider identity lives in the provider stamp / cache key, per §5.6's
+   `(provider, voice_hash)` framing); when the previous `synth.json` header has the
+   same voice_hash **and** the same provider stamp, reuse its `provider_voice_id`
+   by constructing the `VoiceHandle` directly (issue 17 contract); else call
+   `prepare_voice` and persist the mapping. Persisted field:
+   `header.voice = {voice_hash, provider_voice_id|null, kind}` with
+   `kind ∈ {"cloned","preset"}` taken from `VoiceHandle.kind` (issues 08/13 define
+   these fields).
 4. Per-segment cache key: `sha256(text_hash + voice_hash + provider name/model +
    canonical params)`. Segment skipped when key matches existing entry AND its wav
    exists (engine `SegmentCache`, issue 10). Cache hits emit `segment_completed`
    events with `data.cached=true`.
 5. Execution: thread pool of `synthesize.concurrency` (default 2) — providers are
-   sync; each worker checks `ctx.cancelled` before starting a segment. Output WAVs
-   normalized to 44.1 kHz mono via issue 07 helpers when the provider returns other
-   rates.
+   sync; each worker checks `ctx.cancelled` before starting a segment. **Retries are
+   provider-owned** (issue 13 `retry_policy` inside each provider); the stage never
+   re-retries — any `ProviderError` that escapes a provider call is recorded as that
+   segment's failure. Output WAVs normalized to 44.1 kHz mono via issue 07 helpers
+   when the provider returns other rates.
 6. Partial failure policy (§5.6): individual segment failure → record
    `{id, error_code}` in a `failures` list, continue others; at end, if failures
    non-empty → `StageError DS-STAGE-008` listing failed ids (completed WAVs + doc
@@ -69,8 +76,10 @@ cost prompt UX (engine exposes estimate; issue 32 prompts).
 - [ ] Concurrency honored (mock TTS with barrier asserts ≤ N in flight); cancellation
       mid-run leaves completed segment files + doc entries, stage rolls back per §6.1.
 - [ ] Two mock-injected failures → DS-STAGE-008 lists exactly those ids; re-run
-      retries only them.
+      retries only them; a `ProviderQuotaError` escaping the provider is recorded as
+      a failure without any stage-level retry (mock call-count assertion).
 - [ ] Over-long text → DS-STAGE-007 with ids.
+- [ ] `header.voice.kind` persisted correctly for cloned and preset runs.
 
 ## Validation
 
@@ -78,7 +87,8 @@ cost prompt UX (engine exposes estimate; issue 32 prompts).
 
 ## Dependencies
 
-24, 25, 11, 13 (17/18 for real runs).
+24, 25, 11, one of 17/18 (13 transitively via the providers) — matches the
+ISSUE_PLAN row.
 
 ## Non-goals
 

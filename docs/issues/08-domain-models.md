@@ -42,13 +42,15 @@ In: models + (de)serialization + JSON-schema export + tests. Out: file IO/atomic
    provider stamp, segments: list[TranslatedSegment] (id, source_text, text,
    status: Literal["draft","edited","approved"], char_budget: int, notes: str|None).
 4. `model/synthesis.py`: `SynthDoc` — header {provider stamp incl. params_hash,
-   voice: {voice_hash, provider_voice_id: str|None}}, segments:
+   voice: {voice_hash, provider_voice_id: str|None,
+   kind: Literal["cloned","preset"]}}, segments:
    list[SynthSegment] (id, audio: relative POSIX path str, duration_ms, text_hash,
-   created_at).
+   created_at). (Header-form provider/voice dedup matches DESIGN.md §4.3.)
 5. `model/fitreport.py`: `FitReport` — segments: list[FitEntry] (id, slot_ms,
    available_ms, synth_ms, atempo: float, pad_ms, overrun_ms,
    result: Literal["ok","shortened","warn_overflow"], audio: relative path).
-6. `model/events.py`: `RunEvent` per §6.5 (ts, run_id, level, event enum, stage|None,
+6. `model/events.py`: `RunEvent` per §6.5 (ts, run_id,
+   level: Literal["debug","info","warning","error"], event enum, stage|None,
    lang|None, segment_id|None, message, data: dict|None).
 7. Common behaviors:
    - `model_config = ConfigDict(extra="allow")` + round-trip test proving unknown fields
@@ -58,7 +60,11 @@ In: models + (de)serialization + JSON-schema export + tests. Out: file IO/atomic
      `schema_version` > supported.
    - `to_canonical_json(model) -> str`: UTF-8, 2-space indent, sorted keys **off**
      (declaration order), trailing newline — the byte format issue 09 writes.
-   - Relative-path fields validated: POSIX separators, no `..`, no leading `/`.
+   - Relative-path fields validated **syntactically** here: POSIX separators only
+     (backslash rejected), no `..` component, no leading `/`, no empty components.
+     Semantic containment (resolve + `is_relative_to(project_root)`) is the store's
+     job (issue 09) at every path consumption — this split is deliberate (§11.2 B6);
+     document it in the module docstring.
 8. Export JSON Schemas for Transcript/TranslationDoc/Manifest to
    `docs/schemas/*.schema.json` via a `scripts/export_schemas.py` (checked-in output;
    test asserts freshness).
@@ -69,7 +75,8 @@ In: models + (de)serialization + JSON-schema export + tests. Out: file IO/atomic
       unchanged (fixtures copied verbatim into tests).
 - [ ] Stage-key regex accepts `translate:en`, rejects `translate:EN` and `translate:`.
 - [ ] Unknown-field round-trip preserved; schema_version=2 rejected with DS-CONFIG-004.
-- [ ] Path validator rejects `../x.wav` and absolute paths.
+- [ ] Path validator rejects `../x.wav`, `/abs/x.wav`, `a\\b.wav`, `a/../b.wav`,
+      and `a//b.wav`; accepts `segments/seg_0001.wav`.
 - [ ] `docs/schemas/` outputs committed and up to date (CI test).
 
 ## Validation

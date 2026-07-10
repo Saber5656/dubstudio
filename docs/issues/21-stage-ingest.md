@@ -28,14 +28,17 @@ primitives (07), manifest/store mechanics (09/10).
 3. Behavior:
    1. `verify_input(manifest)` (issue 09): hash mismatch → `MediaError DS-MEDIA-002`
       with hint `dubstudio invalidate --input`.
-   2. `probe()` (issue 07) → write `artifacts/ingest/probe.json` (canonical JSON of
-      `MediaInfo`).
+   2. `probe()` (issue 07) → write `artifacts/ingest/probe.json` with the exact
+      shape `{schema_version: 1, has_video: bool, media: <MediaInfo model dump>}`
+      (canonical JSON rules of §4; issue 29 consumes `has_video`).
    3. Validate: at least one audio stream (`DS-MEDIA-003`); duration ≤
       `limits.max_duration_min` (`DS-MEDIA-004`); size ≤ `limits.max_input_gb`
       (`DS-MEDIA-004`).
-   4. Select audio stream: `project.audio_stream` index if set (invalid index →
-      `DS-MEDIA-003` listing available indices), else the container-default/first
-      audio stream.
+   4. Select audio stream: `project.audio_stream` is the **zero-based ordinal within
+      `MediaInfo.audio_streams`** (container order), not the ffprobe stream index;
+      invalid ordinal → `DS-MEDIA-003` listing available streams as
+      `ordinal (ffprobe index #N, codec, lang)`. Unset → the stream with
+      `is_default=true`, else ordinal 0.
    5. Extract to `source.wav`: PCM s16le, 44.1 kHz, channels = min(source channels, 2)
       via `extract_audio` (07).
    6. Emit progress events (extraction is near-instant relative to later stages; a
@@ -47,11 +50,13 @@ primitives (07), manifest/store mechanics (09/10).
 
 ## Acceptance Criteria
 
-- [ ] Fixture video → `probe.json` + `source.wav` created; `wav_duration_ms(source.wav)`
-      equals probe duration ±20 ms.
+- [ ] Fixture video → `probe.json` (schema_version/has_video/media keys) +
+      `source.wav` created; `wav_duration_ms(source.wav)` equals probe duration
+      ±20 ms.
 - [ ] Input with no audio stream fails DS-MEDIA-003; over-duration input fails
       DS-MEDIA-004 (fixture generated at limit+1 min with `limits.max_duration_min=1`
-      override for the test).
+      override for the test); over-size input fails DS-MEDIA-004 (probe size
+      monkeypatched above `limits.max_input_gb` — no giant fixture).
 - [ ] Modified input file (1 byte) → DS-MEDIA-002 with the invalidate hint.
 - [ ] `--audio-stream 1` on a two-audio-stream fixture selects stream 1 (probe of the
       extracted WAV channel content differs from stream 0 — use different tones per
@@ -76,4 +81,4 @@ Downloading, transcoding video, multi-input projects, subtitle-stream extraction
 
 ## Design References
 
-DESIGN.md §5.1, §11.2 B1, §4.1.
+DESIGN.md §5.1, §5.9 (audio-only degradation), §11.2 B1, §4.1.

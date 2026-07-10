@@ -22,25 +22,67 @@ In: the five modules + retry helper + tests. Out: any real provider implementati
 
 ## Detailed Requirements
 
-1. `base.py`: the four Protocols verbatim from DESIGN.md §7.1 with typed models:
-   `ProviderInfo` (name, kind: asr|translation|tts|separation, mode: local|cloud,
-   version), `AsrCaps` (word_timestamps: bool, languages: set[str] | Literal["*"]),
-   `TtsCaps` (supports_cloning, languages, watermark_builtin, max_chars_per_request),
-   `RawTranscript`/`TranslateRequest`/`TranslateResult`/`VoiceReference`
-   (`path`, `voice_hash`)/`VoiceHandle` (provider_voice_id|local handle, voice_hash)/
-   `SynthAudio` (wav_bytes|path, duration_ms)/`SeparationResult`,
-   `Progress = Callable[[float, str], None]`,
-   optional protocol methods `estimate_cost(work: CostWork) -> CostEstimate | None`,
-   `healthcheck() -> HealthReport` (default impls via runtime `hasattr`).
-2. `errors.py`: exception classes per DESIGN.md §7.4 mapping onto issue 05 exit codes;
+1. `base.py`: the four Protocols verbatim from DESIGN.md §7.1 with fully specified
+   pydantic models (all frozen; language codes pre-normalized per issue 06 rule):
+   - `ProviderInfo`: `name: str`, `kind: Literal["asr","translation","tts",
+     "separation"]`, `mode: Literal["local","cloud"]`, `version: str`.
+   - `AsrCaps`: `word_timestamps: bool`, `languages: set[str] | Literal["*"]`.
+   - `TtsCaps`: `supports_cloning: bool`, `languages: set[str] | Literal["*"]`,
+     `watermark_builtin: bool`, `max_chars_per_request: int (> 0)`.
+   - `RawTranscript`: `language: str`, `language_confidence: float | None (0..1)`,
+     `segments: list[RawSegment]`; `RawSegment`: `start_ms: int`, `end_ms: int`,
+     `text: str`, `words: list[RawWord] | None` (`RawWord`: `w, start_ms, end_ms`),
+     `avg_logprob: float | None`, `no_speech_prob: float | None`. (Raw = pre
+     post-processing; may contain overlaps/empties that issue 23 cleans.)
+   - `SegmentIn`: `id: str`, `text: str`, `char_budget: int (≥ 1)`.
+   - `StyleHints`: `register: Literal["spoken"] = "spoken"` (v1 fixed; extension
+     point), `extra: dict[str, str] = {}`.
+   - `TranslateRequest`: `segments: list[SegmentIn] (non-empty)`, `source_lang: str`,
+     `target_lang: str`, `context_summary: str = ""` (≤ 400 chars),
+     `style: StyleHints`.
+   - `TranslateResult`: `texts: dict[str, str]` (id → translation; id set must equal
+     the request's — validator), `overruns: dict[str, int] = {}` (id → chars over
+     budget).
+   - `VoiceReference`: `path: Path` (existing file), `voice_hash: str`.
+   - `VoiceHandle`: `voice_hash: str`, `kind: Literal["cloned","preset"]`,
+     `provider_voice_id: str | None` (cloud voice id), `local_ref: Path | None`
+     (exactly one of provider_voice_id/local_ref set for cloned; both None for
+     preset — validator).
+   - `SynthAudio`: `path: Path` (WAV written by the provider into the dir the stage
+     passed) OR `wav_bytes: bytes` (exclusive — validator), `duration_ms: int`
+     measured by the provider from actual audio.
+   - `SeparationResult`: `vocals: Path`, `background: Path`.
+   - `HealthReport`: `ok: bool`, `detail: str`, `checked: list[str]`.
+   - `Progress = Callable[[float, str], None]` (fraction 0.0–1.0 monotonic, short
+     message).
+   Optional protocol methods `estimate_cost(work: CostWork) -> CostEstimate | None`,
+   `healthcheck() -> HealthReport`, `cleanup_voice(handle)` — presence detected via
+   `hasattr` with no-op defaults documented.
+2. `errors.py`: the provider exception classes are **defined here** as subclasses of
+   issue 05's `ProviderError` family and registered in the append-only catalog with
+   these exact codes: `ProviderAuthError`=DS-PROVIDER-002 (exit 6),
+   `ProviderQuotaError`=DS-PROVIDER-003 (exit 7, carries `retry_after_s: float |
+   None`), `ProviderRemoteError`=DS-PROVIDER-004 (5xx, exit 8),
+   `ProviderNotInstalled`=DS-PROVIDER-005 (exit 12), `ProviderUnsupported`=
+   DS-PROVIDER-006 (exit 8), `ProviderInvalidResponse`=DS-PROVIDER-007 (exit 8),
+   `PluginNotEnabled`=DS-PROVIDER-008 (exit 4), `RequestTooLarge`=DS-PROVIDER-009
+   (exit 8), `ResourceExhausted`=DS-PROVIDER-010 (exit 8). `core/errors.py` keeps
+   only the base classes; no duplicate definitions.
    `retry_policy(fn)` helper — max 5 attempts, exp backoff ×2 with full jitter, cap
-   60 s, honors `retry_after_s` attr on `ProviderQuotaError`; only
-   `ProviderQuotaError` and `ProviderRemoteError` retry.
+   60 s, honors `retry_after_s`; only `ProviderQuotaError` and
+   `ProviderRemoteError` retry.
 3. `registry.py`:
    - static `BUILTINS: dict[str, factory]` seeded by issues 14–20 (this issue registers
      only mocks);
    - `discover_plugins() -> list[PluginInfo]` reading entry-point group
-     `dubstudio.providers` **without importing** (metadata only);
+     `dubstudio.providers` **without importing** — `PluginInfo`: `name` (the entry
+     point name = provider name), `dist_name`, `dist_version`, `ep_value`
+     (`pkg.module:factory`). Kind/mode/capabilities are *unknown until import*:
+     `list_all` renders disabled plugins as `plugin (not loaded)` rows with only
+     these metadata fields. Factory contract once enabled: `factory(config: dict) ->
+     provider instance` (config = that provider's config table). Name collisions:
+     plugin shadowing a builtin is ignored with a WARNING; two plugins with the same
+     name → keep the first by sorted dist_name, WARNING for the rest;
    - `get(kind, name, config) -> Provider`: builtin first; else if name is a discovered
      plugin AND `name in config.providers.enabled_plugins` → import + instantiate;
      else `ProviderNotInstalled DS-PROVIDER-005` (unknown) or `DS-PROVIDER-008`
@@ -48,10 +90,22 @@ In: the five modules + retry helper + tests. Out: any real provider implementati
      auto-import;
    - `list_all(config)` → rows for CLI/UI: name, kind, mode, builtin/plugin,
      enabled, key-env set?, extra installed?, watermark_builtin (tts).
-4. `cost.py`: `CostWork` variants (asr_seconds, mt_chars_in/out, tts_chars,
-   none); built-in USD price table constants (approximate, dated comment) overridable
-   via `[cost.tables]`; `CostEstimate` (usd: float, breakdown: list[str],
-   approximate=True); aggregation helper for the planner.
+4. `cost.py`:
+   - `CostWork` variants: `AsrWork(seconds: float)`, `MtWork(chars_in: int,
+     chars_out_est: int)`, `TtsWork(chars: int)`.
+   - Price table: flat dict keyed `"<provider>.<unit>"` with USD-per-unit floats,
+     module constant `DEFAULT_PRICES` with a dated "approximate, update freely"
+     comment (seed keys: `openai-asr.audio_min`, `openai.tok1k_in`,
+     `openai.tok1k_out` (tokens estimated as chars/4), `elevenlabs.char`,
+     `openai-tts.char`); `[cost.tables]` config entries override by identical key
+     (unknown keys allowed — forward compat).
+   - `CostEstimate`: `usd: float`, `breakdown: list[str]`, `approximate: bool =
+     True`. Breakdown line format (exact): `"<provider>: <qty> <unit> ≈ $<usd>"`
+     with qty rendered `%g` and usd `%.2f`.
+   - `aggregate(estimates: Iterable[CostEstimate | None]) -> CostEstimate | None`:
+     sums usd (float), concatenates breakdowns, returns None only when every input
+     is None; missing price key → that work contributes None + a breakdown line
+     `"<provider>: unknown pricing"`.
 5. `mock.py` (registered as builtins `mock-asr`, `mock-mt`, `mock-tts`, `mock-sep`):
    deterministic, dependency-free — MockAsr returns the fixture transcript pattern
    (sentence per 3 s, words evenly spaced); MockMt uppercases text and prefixes
@@ -76,7 +130,8 @@ In: the five modules + retry helper + tests. Out: any real provider implementati
 
 ## Validation
 
-`uv run pytest tests/providers/test_base.py test_registry.py test_cost.py test_mock.py`.
+`uv run pytest tests/providers/test_base.py tests/providers/test_registry.py
+tests/providers/test_cost.py tests/providers/test_mock.py`.
 
 ## Dependencies
 

@@ -83,7 +83,7 @@ dubstudio differentiates on:
 
 ### 2.2 v1 non-goals
 
-- No lip-sync (v2, see issue 43).
+- No lip-sync (v2, see issue 44).
 - No speaker diarization / multi-speaker voice assignment (ADR-006).
 - No video downloading (YouTube or otherwise) — users supply files they have rights to.
 - No burned-in (hardcoded) subtitles; sidecar files and optional soft-sub track only.
@@ -96,7 +96,7 @@ dubstudio differentiates on:
 
 ### 2.3 v2 deferred ideas
 
-Lip-sync stage (issue 43); diarization + per-speaker voices; DeepL/MT providers; glossary
+Lip-sync stage (issue 44); diarization + per-speaker voices; DeepL/MT providers; glossary
 support; burn-in subtitles; batch/multi-video projects; watermark verification command;
 OS keyring secret storage; Windows CI; elastic timeline (retime video to fit speech);
 waveform view in UI; ElevenLabs PVC; provider-level dubbing APIs comparison mode.
@@ -334,9 +334,12 @@ transcribe post-processing before IDs are published).
 Statuses never block the pipeline in v1 (informational + UI filters), except that
 `run --require-approved` fails if any segment is not `approved`.
 
-`synthesize/<lang>/synth.json` (per segment): `id`, `audio` (relative path),
-`duration_ms`, `text_hash`, `voice_hash`, `provider` `{name, model, params}`,
-`created_at`. `fit/<lang>/fit_report.json` (per segment): `id`, `slot_ms`,
+`synthesize/<lang>/synth.json`: a **header** carrying the shared provider stamp
+(`{name, model, params_hash}`) and voice identity (`{voice_hash,
+provider_voice_id | null, kind: "cloned" | "preset"}`), plus per-segment entries:
+`id`, `audio` (relative path), `duration_ms`, `text_hash`, `created_at`
+(provider/voice are deduplicated into the header rather than repeated per
+segment). `fit/<lang>/fit_report.json` (per segment): `id`, `slot_ms`,
 `available_ms`, `synth_ms`, `atempo`, `pad_ms`, `overrun_ms`,
 `result ∈ {ok, shortened, warn_overflow}` plus file path of fitted audio.
 
@@ -391,10 +394,10 @@ no-op. All intermediate audio is **WAV** (PCM s16le); mono 16 kHz for ASR consum
 - **Inputs**: `ingest/source.wav`.
 - **Behavior**: two-stem separation via separation provider (§7.5) → `vocals.wav` +
   `background.wav` (44.1 kHz, same duration as source ±10 ms, asserted).
-- **Skip rule**: `separate.enabled=false` → status `skipped`; downstream then uses
+- **Skip rule**: `separation.enabled=false` → status `skipped`; downstream then uses
   `source.wav` as the "vocals" input for voice_ref/ASR, and `mix` uses **no bed** (§5.8).
 - **Failure modes**: provider not installed (`DS-PROVIDER-005` with `uv pip install
-  'dubstudio[separate]'` hint); OOM → suggest `separate.segment_len` chunking option.
+  'dubstudio[separate]'` hint); OOM → suggest `separation.segment_s` chunking option.
 
 ### 5.3 `transcribe`
 
@@ -470,7 +473,9 @@ no-op. All intermediate audio is **WAV** (PCM s16le); mono 16 kHz for ASR consum
 - **Behavior** per segment:
   `slot_ms = end_ms − start_ms`; `available_ms = slot_ms + min(gap_to_next × 0.8,
   fit.max_bleed_ms=1500)`; `ratio = synth_ms / available_ms`.
-  - ratio ≤ 1 → keep speed; pad to slot (start-aligned).
+  - ratio ≤ 1 → slow down at most to `fit.atempo_min` (`atempo = clamp(ratio,
+    atempo_min, 1.0)`, skipped when ratio ≥ 0.98 — imperceptible); pad the
+    remainder to slot (start-aligned).
   - 1 < ratio ≤ `fit.atempo_max` (default 1.15) → ffmpeg `atempo=ratio`.
   - ratio > atempo_max and `fit.auto_shorten=true` (default) and segment `status ==
     draft` → one re-translate pass for that segment with `char_budget × 0.8`, then
@@ -572,7 +577,8 @@ Runner emits JSONL events to `logs/run-<ts>.jsonl` and an in-process bus (consum
 CLI progress rendering and UI SSE):
 `{ts, run_id, level, event, stage, lang, segment_id?, message, data?}` with
 `event ∈ {run_started, stage_started, stage_progress, segment_completed, stage_completed,
-stage_failed, warning, cost_estimate, run_completed, run_failed, run_cancelled}`.
+stage_failed, warning, cost_estimate, segment_updated, run_completed, run_failed,
+run_cancelled}` (`segment_updated` is emitted for HITL edits via the UI/CLI).
 
 ---
 
@@ -745,7 +751,7 @@ management, remote access.
 
 | Method & path | Body / params | Returns |
 |---|---|---|
-| `GET /api/project` | — | manifest summary, languages, stage statuses |
+| `GET /api/project` | — | manifest summary, languages, stage statuses, providers in effect (cloud/watermark flags), existing output artifacts (relative paths) |
 | `GET /api/segments?lang=L` | — | merged rows: id, times, source_text, target text/status, synth/fit info, warnings |
 | `PATCH /api/segments/{id}?lang=L` | `{text?, status?}` | updated row (writes translation.json atomically; marks per-segment staleness) |
 | `POST /api/segments/{id}/resynthesize?lang=L` | — | job ref (runs synthesize+fit for one segment) |
@@ -812,8 +818,10 @@ retention. All writes go under the project dir or the user cache dir
   re-triggers the gate.
 - **Provenance/disclosure**: `export` writes container metadata:
   `comment = "Audio dubbed with AI voice cloning (dubstudio vX.Y; consent policy vN
-  accepted)"` plus `DUBSTUDIO=ai-dubbed` custom tag where supported; subtitle files get a
-  header comment cue. Default local TTS (Chatterbox) embeds PerTh audio watermarking on
+  accepted)"` plus `DUBSTUDIO=ai-dubbed` custom tag where supported; target-language
+  VTT subtitle files carry a `NOTE` disclosure header (SRT has no comment facility
+  and is deliberately exempt — disclosure rides on container metadata and VTT).
+  Default local TTS (Chatterbox) embeds PerTh audio watermarking on
   every output; capability surfaced as `watermark_builtin` and shown in `providers list`.
 - **Abuse posture docs**: README + `docs/POLICY.md` (shipped) state prohibited uses
   (impersonation, fraud, harassment, non-consensual cloning), reporting contact, and

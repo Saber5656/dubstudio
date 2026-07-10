@@ -22,14 +22,15 @@ In: `static/index.html` shell, `static/app.css`, `static/segments.js` (+ shared
 
 ## Detailed Requirements
 
-1. `api.js`: fetch wrapper adding `X-Dubstudio-Csrf` (token parsed once from the
-   handshake-set cookie? No — cookie is HttpOnly: the server injects the CSRF token
-   into `index.html` as `<meta name="csrf">` at serve time; issue 34 exposes the
-   hook), JSON error normalization ({error:{code,message}} → thrown typed error),
-   ETag-aware GET for `/api/segments`.
-2. Table (semantic `<table>`, virtualization NOT required in v1 — up to ~2000 rows
-   acceptable; guard: >2000 rows renders a notice + windowed rendering fallback of
-   500 rows/page):
+1. `api.js`: fetch wrapper adding `X-Dubstudio-Csrf` read from the
+   `<meta name="csrf">` tag that issue 34's `index.html` template injects at serve
+   time (the session cookie is HttpOnly and unreadable by JS — the meta hook is the
+   documented mechanism), JSON error normalization ({error:{code,message}} → thrown
+   typed error), ETag-aware GET for `/api/segments`.
+2. Table (semantic `<table>` with **windowed rendering as the normal strategy**,
+   per DESIGN §10.4: only rows in the viewport ± 50-row overscan exist in the DOM,
+   driven by scroll position math over fixed row height — no third-party library;
+   filters/search operate on the full in-memory row set):
    columns: `#` (id), time (`mm:ss.d` start–end + slot), source text (read-only),
    target text (editable), status chip (draft/edited/approved), fit badge
    (ok/shortened/overflow with overrun ms tooltip), audio (▶ original / ▶ dub), chars
@@ -37,12 +38,19 @@ In: `static/index.html` shell, `static/app.css`, `static/segments.js` (+ shared
 3. Editing: click/Enter → textarea inline; Esc cancels; Cmd/Ctrl+Enter or blur saves
    via PATCH; optimistic UI with rollback+toast on error (409 lock → toast "run in
    progress"); status cycle button (draft→approved, edited→approved, approved→edited)
-   PATCHes status; per-row "re-synth" button POSTs resynthesize (disabled while a job
-   is active — job state from `jobs.js` shared store fed by SSE (38); before 38 lands,
-   poll `/api/jobs` — keep a tiny poller behind the same interface).
-4. Audio: single shared `<audio>` element; play stops previous; source =
-   `/api/audio/{kind}/{id}?lang=`; buttons show loading/na states (404 → disabled
-   with tooltip "not synthesized yet").
+   PATCHes status; per-row "re-synth" button POSTs resynthesize (disabled while a
+   job is active). Job-active state in this issue comes from a small `jobstate.js`
+   store that tracks job ids returned by this view's own POSTs and polls
+   `GET /api/jobs/{id}` every 2 s while one is live (there is no `GET /api/jobs`
+   list route); issue 38's SSE-driven `jobs.js` later replaces the polling behind
+   the identical store interface.
+   Local re-synth indicator: a client-side "dirty" flag set on a row after a
+   successful text PATCH and cleared when a resynthesize/run job completes for that
+   row (rows are not stale-annotated by the read API in v1).
+4. Audio: single shared `<audio>` element; play stops previous; kind mapping
+   (issue 35 routes): ▶ original → `/api/audio/source/{id}`; ▶ dub →
+   `/api/audio/fit/{id}` falling back to `/api/audio/synth/{id}` on 404 (fit not
+   run yet), disabled with tooltip "not synthesized yet" when both 404.
 5. Filters/nav: status filter chips (all/draft/edited/approved/warnings), text search
    (client-side, both languages), j/k row navigation, `o`/`d` play original/dub, `e`
    edit — documented in a `?` help overlay. `aria-live=polite` for toasts; focus
@@ -57,7 +65,9 @@ In: `static/index.html` shell, `static/app.css`, `static/segments.js` (+ shared
 ## Acceptance Criteria
 
 - [ ] Serves and renders on the fixture project with 50 segments incl. one of each
-      fit result; manual checklist in PR (screenshots light+dark).
+      fit result; windowed rendering verified with a 3000-row synthetic set (DOM row
+      count stays bounded while scrolling); manual checklist in PR (screenshots
+      light+dark).
 - [ ] `rg "innerHTML" static/` shows only the allowed help-overlay case.
 - [ ] Editing flow: save → row shows `edited` + stale re-synth indicator; 409 during
       job → rollback toast (simulated via TestClient-driven job).
@@ -74,7 +84,7 @@ plain-DOM; no JS unit framework in v1 (documented trade-off).
 
 ## Dependencies
 
-35, 36 (34 for csrf meta hook).
+35, 36, 34 (csrf meta hook in index.html) — matches the ISSUE_PLAN row.
 
 ## Non-goals
 

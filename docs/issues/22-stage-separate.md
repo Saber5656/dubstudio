@@ -22,17 +22,20 @@ provider internals (20), mix bed behavior (28 — consumes the skip flag).
 
 ## Detailed Requirements
 
-1. `Stage` with `name="separate"`, deps `["ingest"]`; `config_subset` = `[separation]`;
-   provider stamp from the configured separation provider.
+1. `Stage` with `name="separate"`, deps `["ingest"]`;
+   `input_artifacts = [artifacts/ingest/source.wav]`; `config_subset` =
+   `[separation]` (the `[separation]` table per issue 06 / DESIGN §8.2 — `enabled`
+   drives the skip rule); provider stamp from the configured separation provider.
 2. When `separation.enabled=false`: engine marks the stage `skipped` (issue 10 handles
-   the transition); this stage contributes a helper
-   `vocals_source(store, manifest) -> Path` returning
-   `separate/vocals.wav` when completed else `ingest/source.wav` — the single
-   accessor used by transcribe (23) and voice_ref (25). Unit here, exported from the
-   stage module.
+   the transition); this stage module exports the single vocal-source accessor used
+   by transcribe (23) and voice_ref (25):
+   `vocals_source(store, manifest) -> Path` — exact status mapping:
+   `completed` → `artifacts/separate/vocals.wav`; `skipped` →
+   `artifacts/ingest/source.wav`; **any other status → `StageError DS-STAGE-001`**
+   (dependency not satisfied — never silently fall back).
 3. When enabled: call `SeparationProvider.separate(source.wav, artifacts/separate/)`;
-   verify both outputs exist, sample rate 44.1 kHz, duration == source ±10 ms (drift →
-   `DS-STAGE-004`).
+   verify both outputs exist, are PCM s16le WAV at 44.1 kHz with the same channel
+   count as `source.wav`, duration == source ±10 ms (drift → `DS-STAGE-004`).
 4. Progress events forwarded from the provider callback (0.0–1.0 → stage_progress).
 5. Failure of the provider surfaces its `ProviderError` unchanged (engine records it).
 6. Cancellation: poll `ctx.cancelled` between provider chunks where the provider
@@ -41,11 +44,13 @@ provider internals (20), mix bed behavior (28 — consumes the skip flag).
 
 ## Acceptance Criteria
 
-- [ ] With mock provider: both stems written, durations validated, stage completes;
-      fingerprint includes provider stamp (changing provider name → stale).
+- [ ] With mock provider: both stems written, format/channel/duration validated,
+      stage completes; fingerprint includes provider stamp (changing provider name →
+      stale) and input hash (modifying `source.wav` → stale).
 - [ ] `separation.enabled=false` → stage `skipped`; `vocals_source()` returns
       `source.wav`; flipping to true re-plans the stage (engine test already covers the
       transition; this test asserts the accessor flips).
+- [ ] `vocals_source()` with separate in `pending`/`failed` raises DS-STAGE-001.
 - [ ] Duration-drift stem (mock returns short file) → DS-STAGE-004.
 - [ ] Provider ProviderNotInstalled propagates with its install hint.
 
@@ -55,7 +60,7 @@ provider internals (20), mix bed behavior (28 — consumes the skip flag).
 
 ## Dependencies
 
-21, 20 (interface; tests use mock), 10.
+21, 20 (interface; tests use mock), 10 — ISSUE_PLAN row matches.
 
 ## Non-goals
 

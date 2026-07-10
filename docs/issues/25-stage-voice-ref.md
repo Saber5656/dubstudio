@@ -23,8 +23,13 @@ use of the reference (17/18).
 ## Detailed Requirements
 
 1. `Stage` `name="voice_ref"`, deps `["separate", "transcribe"]` (vocals via
-   `vocals_source`, issue 22); `config_subset` = `[voice_ref]` + `voice` manifest
-   block.
+   `vocals_source`, issue 22); `config_subset` = `[voice_ref]` **only** —
+   `manifest.voice` is state, not config: the canonical JSON of the voice block
+   (plus the user reference file's content hash in user mode) enters the fingerprint
+   as an *input*, alongside the vocals and transcript hashes.
+   All media operations (validation decode, slicing, concat, resample) go through
+   issue 07 helpers / `procs.run` (§11.3); `voice.user_ref_path` is opened
+   read-only; every write lands under `artifacts/voice_ref/` only.
 2. **Consent**: call `require_consent(interactive=ctx.interactive)` (issue 11) before
    any work; store returned snapshot into `manifest.consent_snapshot`.
 3. User mode (`voice.mode == "user"`): validate `voice.user_ref_path` — exists,
@@ -33,9 +38,18 @@ use of the reference (17/18).
    `reference.json = {source: "user", input_sha256, built_at}`.
 4. Auto mode: score each transcript segment over the vocals track:
    - hard filters: duration 3–15 s; `avg_logprob ≥ −0.5`; clip ratio < 0.1%
-     (`rms_and_clipping`, issue 07); mean RMS within −30..−10 dBFS;
-   - score = weighted sum (weights as module constants): loudness stability (stddev of
-     per-500ms RMS, lower better), avg_logprob, duration closeness to 8 s;
+     (`rms_and_clipping`, issue 07); mean RMS within −30..−10 dBFS; **music
+     dominance** (§5.5): when `separate` completed, the span's vocals-stem mean RMS
+     must exceed the background-stem mean RMS over the same span by ≥ 10 dB
+     (module constant `VOCAL_DOMINANCE_DB = 10.0`); when separation is skipped this
+     filter is skipped with a one-line info log (documented limitation);
+   - score (exact, all components clamped to [0, 1]):
+     `logprob_score = clamp(avg_logprob + 1.0, 0, 1)`;
+     `stability_score = clamp(1 − rms_std_db / 6.0, 0, 1)` where `rms_std_db` is the
+     stddev of per-500 ms RMS dBFS;
+     `duration_score = 1 − min(|duration_s − 8| / 8, 1)`;
+     `score = 0.4·logprob_score + 0.4·stability_score + 0.2·duration_score`;
+     sort **descending by score**, ties broken by earlier `start_ms`, then id;
    - select top segments until total ≥ `voice_ref.target_seconds` (60) or candidates
      exhausted; total < `voice_ref.min_seconds` (20) → `DS-STAGE-003` with hint to use
      `dubstudio voice set --ref`;
@@ -54,8 +68,11 @@ use of the reference (17/18).
 - [ ] User mode: 8 s file rejected (too short); 48 kHz stereo 60 s file converted to
       44.1 kHz mono with duration preserved ±20 ms; provenance correct.
 - [ ] Auto mode on synthetic vocals (fixture with 6 clean tone-speech segments of
-      known RMS + 2 clipped + 2 quiet): selects exactly the clean ones, orders by
-      score, totals ≥ target where possible; spans recorded with scores.
+      known RMS + 2 clipped + 2 quiet + 1 music-dominated span with a loud
+      background stem): selects exactly the clean ones (music-dominated excluded),
+      orders by the exact score formula (unit-tested separately with hand-computed
+      values), totals ≥ target where possible; spans recorded with scores.
+- [ ] Separation-skipped variant: dominance filter skipped, info log emitted.
 - [ ] Under-20s scenario → DS-STAGE-003 with the voice-set hint.
 - [ ] Switching mode user→auto marks stage stale (fingerprint test).
 
@@ -66,7 +83,8 @@ scoring functions additionally pure-unit-tested without media marker).
 
 ## Dependencies
 
-23, 11 (consent), 22 (vocals accessor), 07.
+23, 11 (consent), 07; 22's accessor when separation is enabled — ISSUE_PLAN row
+matches this list.
 
 ## Non-goals
 

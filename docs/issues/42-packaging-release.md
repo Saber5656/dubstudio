@@ -25,13 +25,21 @@ workflow (02), Homebrew/other channels (v2).
 
 ## Detailed Requirements
 
-1. `.github/workflows/release.yml`: trigger `push: tags: ["v*"]`;
-   jobs: `test` (reuse CI via `workflow_call` on issue 02's workflow) → `build`
-   (`uv build`; `twine check dist/*`; upload artifacts) → `publish` (environment
-   `pypi`, `permissions: id-token: write`, `pypa/gh-action-pypi-publish` pinned by
-   SHA, no secrets) → `github-release` (creates the Release with generated notes +
-   the CHANGELOG section for the tag, attaches dist files). Tag↔version guard: job
-   fails if `pyproject.toml` version ≠ tag (strip `v`).
+1. `.github/workflows/release.yml`: trigger `push: tags: ["v*"]`; **this issue also
+   adds a `workflow_call` trigger to `.github/workflows/ci.yml`** (issue 02's file
+   only has pull_request/push) so the release can reuse it.
+   Jobs and least-privilege permissions (top-level `permissions: contents: read`):
+   `test` (calls ci.yml via `workflow_call`) → `build` (`uv build`; `twine check
+   dist/*`; upload artifacts; `contents: read`) → `publish` (environment `pypi`,
+   `permissions: {contents: read, id-token: write}`, `pypa/gh-action-pypi-publish`
+   pinned by SHA, no secrets) → `github-release` (`permissions: {contents: write}`
+   — the only write-scoped job; creates the Release with generated notes + the
+   CHANGELOG section for the tag, attaches dist files).
+   Tag↔version guard: fails unless `pyproject.toml` version == tag minus `v`;
+   the `publish` job additionally runs **only** for final-format tags
+   (`^v\d+\.\d+\.\d+$`) — PEP 440 dev tags (e.g. `v0.0.1.dev1`) are allowed through
+   build for TestPyPI dry runs via a separate `testpypi` environment/job gated on
+   the dev-tag pattern.
 2. Versioning: SemVer 0.x; version lives only in `pyproject.toml`
    (`dubstudio.__version__` reads metadata, issue 01); `0.1.0` is the v1-complete
    release per ISSUE_PLAN §1.
@@ -45,17 +53,23 @@ workflow (02), Homebrew/other channels (v2).
    user decision)**; tag + push; verify PyPI page, `uvx dubstudio version`, GitHub
    Release. Includes the one-time Trusted Publisher setup instructions (maintainer
    manual step, with exact PyPI UI fields: owner, repo, workflow file, environment).
-5. sdist/wheel content policy: exclude `tests/`, `docs/` (except LICENSE/NOTICE/
-   POLICY.md which ship in the wheel — POLICY.md is read by the consent gate? No:
-   issue 11 embeds the affirmation constant; POLICY.md ships for reference only) —
-   define `[tool.hatch.build]`/equivalent includes explicitly; wheel imports cleanly
-   without dev files (`python -c "import dubstudio"` from wheel in the workflow).
+5. Package content policy (explicit `[tool.hatch.build]`/equivalent config):
+   - **wheel**: the package tree + root `LICENSE` and `NOTICE` via the
+     `license-files` metadata; nothing from `docs/` or `tests/` (the consent gate
+     embeds its affirmation constant per issue 11 — it does not read POLICY.md at
+     runtime);
+   - **sdist**: additionally includes `docs/POLICY.md`, `README.md`, `CHANGELOG.md`;
+   - workflow smoke: install the built wheel in a clean venv and run
+     `python -c "import dubstudio"` + `dubstudio version`.
 
 ## Acceptance Criteria
 
-- [ ] Dry run on a fork/test tag (`v0.0.1.dev1` to TestPyPI via a temporary parallel
-      environment config) succeeds end-to-end; evidence linked in PR.
+- [ ] Dry run with dev tag `v0.0.1.dev1` publishes to TestPyPI through the
+      `testpypi` job while the production `publish` job is skipped (dev-tag gate
+      proven); evidence linked in PR.
 - [ ] Tag/version mismatch fails the workflow (tested with a bad tag on the fork).
+- [ ] Permissions blocks match the least-privilege table above (workflow lint +
+      review).
 - [ ] `uv build` artifacts pass `twine check`; wheel import-smoke green in workflow.
 - [ ] Changelog-check behaves (PR without CHANGELOG change fails unless labeled).
 - [ ] Checklist doc complete incl. Trusted Publisher manual setup + U-06 gate; no
@@ -68,7 +82,8 @@ checklist against a mock release.
 
 ## Dependencies
 
-01, 02 (04 for pinning conventions).
+01, 02 (ci.yml gains `workflow_call` here), 03 (LICENSE/NOTICE/POLICY.md must exist
+to package) — matches the ISSUE_PLAN row; 04 for pinning conventions.
 
 ## Non-goals
 
