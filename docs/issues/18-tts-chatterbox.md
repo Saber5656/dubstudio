@@ -26,8 +26,15 @@ Out: reference building (25), fit/timing (27).
 1. Import policy mirrors issue 14: constructor availability check
    (`find_spec("chatterbox")`) raising `ProviderNotInstalled DS-PROVIDER-005` with
    hint `uv pip install 'dubstudio[local-tts]'`; import on first use.
-2. Config `[tts.chatterbox]` (schema in issue 06): `model="multilingual"`,
-   `device="auto"` (auto: cuda → mps → cpu), `exaggeration=0.5`, `cfg_weight=0.5`.
+2. Config `[tts.chatterbox]` (schema in issue 06): `model:
+   Literal["multilingual","english"] = "multilingual"` (each value maps to its
+   import path in req 3; any other value → `ConfigError DS-CONFIG-001` listing
+   both), `device="auto"` (resolution order: `torch.cuda.is_available()` →
+   `torch.backends.mps.is_available()` → cpu; explicit values restricted to
+   `auto|cuda|mps|cpu`, others → DS-CONFIG-001), `exaggeration=0.5`,
+   `cfg_weight=0.5`.
+   Consent boundary: this provider performs **no consent checks** — the synthesize
+   stage (issue 26) gates before invoking it (same model as issue 17).
 3. Library contract (as of the 2026-07 research; **verify symbol names against the
    pinned `chatterbox-tts` version at implementation time — if they differ, update
    this issue file first, docs-first rule**): pin the package version in pyproject;
@@ -47,9 +54,13 @@ Out: reference building (25), fit/timing (27).
 5. `capabilities()`: `supports_cloning=True`, languages = the library's supported set
    (constant, incl. `ja`, `en`), **`watermark_builtin=True`**,
    `max_chars_per_request` per library guidance (constant with source comment).
-6. `prepare_voice(ref)`: validate reference WAV (mono-able, ≥ 10 s recommended — warn
-   under 10 s); return `VoiceHandle{kind:"cloned", local_ref=ref.path,
-   provider_voice_id=None, voice_hash}` (no remote state).
+6. `prepare_voice(ref)`: the input is the stage-produced `reference.wav` (already
+   validated and normalized to 44.1 kHz mono by issue 25) — this provider performs
+   **defensive** checks only: file readable as WAV and duration ≥ 3 s, else raise
+   `StageError DS-STAGE-003` ("voice reference unusable"); duration < 10 s →
+   WARNING log (`"reference under 10 s; clone quality may suffer"`); returns
+   `VoiceHandle{kind:"cloned", local_ref=ref.path, provider_voice_id=None,
+   voice_hash}` (no remote state).
 7. `synthesize(text, voice, language, params)`: per req 3; duration measured from the
    produced WAV. Long text (> max_chars) → `DS-PROVIDER-009` (stage prevents this).
 8. `ProviderInfo.version` format: `chatterbox/<package_version>/<repo>@<revision>`.
@@ -92,7 +103,7 @@ Out: reference building (25), fit/timing (27).
 
 ## Dependencies
 
-13, 07, 11.
+13, 07 — matches the ISSUE_PLAN row. (Consent is stage-owned, issue 26.)
 
 ## Non-goals
 

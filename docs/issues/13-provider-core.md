@@ -52,23 +52,30 @@ In: the five modules + retry helper + tests. Out: any real provider implementati
      passed) OR `wav_bytes: bytes` (exclusive — validator), `duration_ms: int`
      measured by the provider from actual audio.
    - `SeparationResult`: `vocals: Path`, `background: Path`.
+   - `TtsParams`: frozen pydantic model with `extra="allow"` — the selected TTS
+     provider's config-table dump (issue 06) passed through verbatim; each provider
+     documents the keys it reads (e.g. chatterbox: exaggeration/cfg_weight;
+     elevenlabs: stability/similarity_boost/style) and ignores unknown keys. Its
+     canonical JSON participates in the synth cache key (issue 26).
    - `HealthReport`: `ok: bool`, `detail: str`, `checked: list[str]`.
    - `Progress = Callable[[float, str], None]` (fraction 0.0–1.0 monotonic, short
      message).
-   Optional protocol methods `estimate_cost(work: CostWork) -> CostEstimate | None`,
-   `healthcheck() -> HealthReport`, `cleanup_voice(handle)` — presence detected via
-   `hasattr` with no-op defaults documented.
-2. `errors.py`: the provider exception classes are **defined here** as subclasses of
-   issue 05's `ProviderError` family and registered in the append-only catalog with
-   these exact codes: `ProviderAuthError`=DS-PROVIDER-002 (exit 6),
+   `cleanup_voice(handle)` is a **required** TtsProvider method (DESIGN §7.1);
+   providers with no remote state implement a documented no-op. Optional protocol
+   methods (detected via `hasattr`): `estimate_cost(work: CostWork) ->
+   CostEstimate | None`, `healthcheck() -> HealthReport`.
+2. `errors.py`: **re-exports** the provider exception classes that issue 05 defines
+   and catalogs in `core/errors.py` (single source of truth for classes/codes/exit
+   codes — no duplicate class definitions here). The exact class↔code map (as
+   catalogued by issue 05): `ProviderAuthError`=DS-PROVIDER-002 (exit 6),
    `ProviderQuotaError`=DS-PROVIDER-003 (exit 7, carries `retry_after_s: float |
    None`), `ProviderRemoteError`=DS-PROVIDER-004 (5xx, exit 8),
    `ProviderNotInstalled`=DS-PROVIDER-005 (exit 12), `ProviderUnsupported`=
    DS-PROVIDER-006 (exit 8), `ProviderInvalidResponse`=DS-PROVIDER-007 (exit 8),
    `PluginNotEnabled`=DS-PROVIDER-008 (exit 4), `RequestTooLarge`=DS-PROVIDER-009
-   (exit 8), `ResourceExhausted`=DS-PROVIDER-010 (exit 8). `core/errors.py` keeps
-   only the base classes; no duplicate definitions.
-   `retry_policy(fn)` helper — max 5 attempts, exp backoff ×2 with full jitter, cap
+   (exit 8), `ResourceExhausted`=DS-PROVIDER-010 (exit 8).
+   This module adds the provider-layer helper only:
+   `retry_policy(fn)` — max 5 attempts, exp backoff ×2 with full jitter, cap
    60 s, honors `retry_after_s`; only `ProviderQuotaError` and
    `ProviderRemoteError` retry.
 3. `registry.py`:
@@ -91,8 +98,13 @@ In: the five modules + retry helper + tests. Out: any real provider implementati
    - `list_all(config)` → rows for CLI/UI: name, kind, mode, builtin/plugin,
      enabled, key-env set?, extra installed?, watermark_builtin (tts).
 4. `cost.py`:
-   - `CostWork` variants: `AsrWork(seconds: float)`, `MtWork(chars_in: int,
-     chars_out_est: int)`, `TtsWork(chars: int)`.
+   - `CostWork` variants (each carries the estimator identity):
+     `AsrWork(provider: str, seconds: float)`, `MtWork(provider: str,
+     chars_in: int, chars_out_est: int)`, `TtsWork(provider: str, chars: int)`.
+   - Estimation helper providers call:
+     `line(table, *, provider, price_key, qty, unit_label) -> CostEstimate | None`
+     — returns None (with the breakdown line `"<provider>: unknown pricing"`
+     handled by `aggregate`) when `price_key` is absent.
    - Price table: flat dict keyed `"<provider>.<unit>"` with USD-per-unit floats,
      module constant `DEFAULT_PRICES` with a dated "approximate, update freely"
      comment (seed keys: `openai-asr.audio_min`, `openai.tok1k_in`,
@@ -113,8 +125,13 @@ In: the five modules + retry helper + tests. Out: any real provider implementati
    WAV of `len(text) × 55 ms` (deterministic duration for fit tests),
    `supports_cloning=True`, `watermark_builtin=False`; MockSep splits source into two
    copies at −6 dB. All record their call args onto `self.calls` for assertions.
-6. Language normalization helper `normalize_lang("ja")` shared by providers
-   (lowercase primary subtag; region preserved).
+6. Language normalization helper `normalize_lang` shared by providers — identical
+   semantics to issue 06's rule (primary subtag lowercased, region **uppercased**,
+   same validation regex; `en-us` → `en-US`); the two modules share one
+   implementation (config imports it from here or vice versa — single definition).
+7. `list_all(config)` row schema matches issue 31's JSON convention: for discovered
+   but disabled plugins, `kind/mode/watermark_builtin/languages` are `null`
+   ("unknown until import") and `origin="plugin", enabled=false`.
 
 ## Acceptance Criteria
 

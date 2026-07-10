@@ -43,18 +43,27 @@ stage's edit-preservation logic (issue 24 — stage decides *which* segments to 
    `json_mode: auto|on|off`, default auto = on for api.openai.com, off otherwise);
    `Authorization: Bearer <key>` header **only when a key is resolved**; request
    timeout 120 s; TLS verification always on (no config to disable — §11.2 B2).
-4. Response handling: strip a single Markdown code fence if present, then extract the
-   first top-level JSON object (that is the **only** local repair permitted); parse;
-   validate id set equality with the request window, non-empty texts; on violation
-   retry **once** with an appended corrective user message; second failure →
-   `ProviderInvalidResponse DS-PROVIDER-007` naming the window's first/last ids.
+4. Response handling: strip a single wrapping Markdown code fence if present; after
+   that, the content must be **exactly one JSON object with nothing but whitespace
+   outside it** — any other prose/multiple objects count as a violation (no
+   further local repair); parse; validate id set equality with the request window,
+   non-empty texts; on any violation retry **once** with an appended corrective
+   user message; second failure → `ProviderInvalidResponse DS-PROVIDER-007` naming
+   the window's first/last ids.
 5. Over-budget outputs are accepted (soft limit) but flagged in
    `TranslateResult.overruns` (id → chars over) for stage warnings.
 6. Retry/backoff via issue 13 policy for 429/5xx; 401 → auth error.
-7. `estimate_cost`: (chars_in + estimated chars_out) → token estimate (chars/4)
-   × price table for the configured model; unknown model → None (planner shows
-   "unknown").
-8. `healthcheck()`: GET `/models` (or `base_url` root for non-OpenAI), 10 s timeout.
+7. `estimate_cost(MtWork)`: token estimate = chars/4, priced with the
+   **model-agnostic** keys `openai.tok1k_in` / `openai.tok1k_out` from issue 13's
+   table for every configured model (documented approximation — per-model pricing
+   is not modeled in v1; `[cost.tables]` overrides the two keys). Returns None only
+   when the keys are absent from the table.
+8. `healthcheck()`: `GET {base_url or default}/models`, 10 s timeout; on 404/405
+   fall back to `GET {base_url}` once; any 2xx → `ok=true`, anything else →
+   `ok=false` with status in detail.
+9. `ProviderInfo`: `name="openai"`, `kind="translation"`, `mode="cloud"` **unless**
+   `base_url` host is `127.0.0.1`/`localhost`, then `mode="local"` (drives the plan
+   badge, §11.5); `version` = model + PROMPT_VERSION.
 9. Privacy & secrecy (§11.2 B2): provider docstring + user-docs stub state that
    source-segment texts and the context block are sent to the configured endpoint
    (and to OpenAI by default); API key never appears in logs/exceptions (test with a
@@ -68,8 +77,9 @@ stage's edit-preservation logic (issue 24 — stage decides *which* segments to 
 - [ ] Missing id / extra id / empty text each trigger the corrective retry.
 - [ ] `base_url=http://127.0.0.1:11434/v1` with no key does not raise auth error.
 - [ ] Overruns reported for texts exceeding budget.
-- [ ] Code-fenced JSON response parses (repair path); prose-wrapped JSON beyond one
-      object → corrective retry.
+- [ ] Code-fenced JSON response parses (fence-strip path); prose around the object
+      or a second JSON object → corrective retry (then DS-PROVIDER-007).
+- [ ] Cost estimate uses tok1k keys for any model; keys removed from table → None.
 - [ ] Fake `OPENAI_API_KEY` never appears in logs/exceptions (grep test); request to
       api.openai.com carries Bearer header exactly once.
 - [ ] Prompt file hash change changes `ProviderInfo.version` (fingerprint test).

@@ -28,8 +28,13 @@ notes. Out: transcript post-processing (engine-side, issue 23), diarization (ADR
    `uv pip install 'dubstudio[local-asr]'`; the actual import happens on first use.
 2. Config (issue 06 `[asr.faster_whisper]`):
    - `model`: (a) a known alias — `large-v3-turbo` (default), `large-v3`, `medium`,
-     `small`, `tiny` — mapped to pinned `(HF repo, revision)` constants in this
-     module; (b) an explicit `repo_id@revision` string (revision **required** for
+     `small`, `tiny` — mapped to pinned `(repo_id, revision)` constants in this
+     module. The repo ids are the official faster-whisper conversions on Hugging
+     Face (`Systran/faster-whisper-<size>` family); **revisions must be immutable
+     commit SHAs, not tags/branches**, resolved from the official repos at
+     implementation time and committed with a dated comment (do not trust this
+     issue or memory for the SHAs; the AC below enforces their presence and
+     format); (b) an explicit `repo_id@revision` string (revision **required** for
      non-alias ids; missing → `ConfigError DS-CONFIG-001` with example); or (c) an
      existing local directory path (no download).
    - `device` (`auto|cpu|cuda`; `auto` = cuda if available else cpu — MPS unsupported
@@ -66,6 +71,8 @@ notes. Out: transcript post-processing (engine-side, issue 23), diarization (ADR
 
 - [ ] Without the extra installed (find_spec mocked to None), constructing the
       provider raises DS-PROVIDER-005 with the exact install hint.
+- [ ] Alias pin table exists with all five aliases, each revision matching
+      `^[0-9a-f]{40}$` (commit SHA format test) and a dated source comment.
 - [ ] Unit tests (faster_whisper module mocked): timestamp mapping s→ms exact;
       `language="auto"` passes None to the lib; vad_filter and word_timestamps flags
       set; darwin device fallback logs info and uses cpu; compute_type rejection for

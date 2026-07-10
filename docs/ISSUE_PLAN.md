@@ -87,8 +87,8 @@ Hard dependencies only (soft/informational noted in each issue file).
 | 14 | 13, 07 |
 | 15 | 13, 07 |
 | 16 | 13 |
-| 17 | 13, 07, 11 |
-| 18 | 13, 07, 11 |
+| 17 | 13, 07 |
+| 18 | 13, 07 |
 | 19 | 13, 07 |
 | 20 | 13, 07 |
 | 21 | 07, 09, 10 |

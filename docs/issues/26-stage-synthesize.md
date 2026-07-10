@@ -61,6 +61,14 @@ cost prompt UX (engine exposes estimate; issue 32 prompts).
 7. `synth.json` per issue 08 `SynthDoc`: header (provider stamp incl. params hash,
    voice {voice_hash, provider_voice_id|None, kind}), per-segment entries with
    measured `duration_ms`.
+8. Exported single-segment helper (consumed by fit auto-shorten, issue 27, and UI
+   resynthesize, issue 36):
+   `synthesize_segment(ctx: StageContext, lang: str, segment_id: str) ->
+   SynthSegment` — synthesizes exactly that segment through the same guards/voice/
+   provider plumbing as the stage (consent, capability, length), overwrites its
+   synth-doc entry and WAV atomically under the project lock, emits
+   `segment_completed`, and returns the updated entry; provider errors propagate
+   unchanged (no partial-failure list for the single-segment path).
 8. Cost: aggregate `estimate_cost` over cache-miss texts; expose on the plan
    (issue 10 contract); the runner receives the engine-level confirmation result — this
    stage never prompts.

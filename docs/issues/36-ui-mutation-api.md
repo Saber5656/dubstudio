@@ -47,21 +47,30 @@ Out: server foundation (34), read routes (35), frontend consumption (37/38).
    --accept`; cost estimate above threshold → 409 `DS-COST-001` unless body
    `{"acknowledge_cost": true}` (frontend shows the estimate from the 409 payload
    `{estimate}` and retries with the flag).
-4. `POST /api/segments/{id}/resynthesize?lang=L`: shorthand creating a job that runs
-   synthesize+fit restricted to that segment (engine per-segment invalidation +
-   filtered run); same 409 rules.
+4. `POST /api/segments/{id}/resynthesize?lang=L`: creates a job that (a) applies
+   engine per-segment invalidation for that id (issue 10), then (b) runs the engine
+   with `until="fit", target=[lang]` — the per-segment caches of
+   synthesize/fit (issues 26/27) restrict actual work to the invalidated segment
+   (plus any other already-stale segments, which is correct behavior); same 409
+   rules. (Single-segment synthesis itself is issue 26's `synthesize_segment`; the
+   job path above reuses the ordinary runner so job/SSE semantics stay uniform.)
 5. `GET /api/jobs/{id}`: returns the registry object `{id, state, started_at,
    finished_at, error?, summary?}`; unknown id → stable 404 JSON error.
    `POST /api/jobs/{id}/cancel`: `runner.cancel()` semantics (§6.1 rollback);
-   idempotent (cancelling a finished job is a no-op 200).
+   idempotent (cancelling a finished job is a no-op 200); unknown id → the same
+   stable 404.
 6. `GET /api/events` (SSE, §10.3): subscribes to the in-process event bus; emits
-   `event: <RunEvent.event>` + `data: <RunEvent JSON>`; 15 s `: heartbeat` comments;
-   on connect, replays the current job's `stage_started`-to-now tail (last 100
-   events) so late-joining clients render state; client disconnect detection stops
-   the generator. CSRF not required (GET), cookie required (34 middleware).
-7. All mutations emit events; segment edits emit the `segment_updated` event, which
-   DESIGN.md §6.5 defines as part of the event enum (issue 08's `RunEvent` enum
-   includes it — no ad-hoc extension here).
+   `event: <RunEvent.event>` + `data: <RunEvent JSON>`; heartbeat comments every
+   `heartbeat_s` (production default 15; **injectable via the app factory for
+   tests** — SSE tests use 0.1 s, no wall-clock flakiness); on connect, replays the
+   current job's `stage_started`-to-now tail (last 100 events) so late-joining
+   clients render state; client disconnect detection stops the generator. CSRF not
+   required (GET), cookie required (34 middleware).
+7. All mutations emit events; segment edits emit `segment_updated` (in the §6.5
+   enum; issue 08's `RunEvent` includes it) with the exact shape:
+   `{event: "segment_updated", stage: "translate", lang, segment_id,
+   message: "edited via ui", data: {status, text_hash}}` (run_id = the synthetic
+   ui-session id; no run is active).
 
 ## Acceptance Criteria
 

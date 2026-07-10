@@ -41,23 +41,28 @@ work (24/26 expose `retranslate_segment` / single-segment synth used here), mixi
      entirely (imperceptible; avoids a pointless re-encode). Remainder padded with
      tail silence to slot_ms; action `keep` when no tempo applied, else `atempo`;
    - 1 < ratio ≤ `cfg.atempo_max` (default 1.15) → action `atempo` with
-     `atempo = ratio` (fills available exactly; `overrun_ms = max(fitted − slot,
-     0)` recorded);
-   - ratio > atempo_max → action `shorten_candidate` with
-     `overrun_ms = synth_ms/cfg.atempo_max − available_ms` (the planner knows
-     nothing of translation status or auto_shorten config — see req 3);
+     `atempo = ratio`;
+   - ratio > atempo_max → action `shorten_candidate` (projected at `atempo_max`;
+     the planner knows nothing of translation status or auto_shorten config — see
+     req 3);
+   - `overrun_ms` has **one meaning everywhere**:
+     `max(projected_fitted_ms − slot_ms, 0)` where `projected_fitted_ms =
+     synth_ms / atempo_of_the_branch` (`atempo_max` for `shorten_candidate`) — this
+     is the value persisted in `FitEntry.overrun_ms` and used for collision
+     warnings;
    - the planner never truncates audio.
 3. Shorten/overflow resolution (stage code, not planner): on `shorten_candidate`,
    if `fit.auto_shorten=true` (default) **and** the segment's translation status ==
    `draft` → one re-translate pass via `retranslate_segment(ctx, lang, id,
-   char_budget × 0.8)` (issue 24) → single-segment re-synthesis via the synthesize
-   stage's exported helper (cache-aware) → re-plan **once**; if the re-plan still
-   yields `shorten_candidate`, or the segment was never eligible → overflow
-   handling: apply `atempo_max`, allow overrun into the bleed room, result
-   `warn_overflow` (fitted end colliding with the next segment's start → collision
-   warning with overlap ms). Eligible-and-improved path records result `shortened`;
-   translation doc updated with the shortened text (status stays `draft`), synth
-   doc updated.
+   shorten_budget)` where `shorten_budget = max(12, floor(char_budget × 0.8))`
+   (issue 24) → single-segment re-synthesis via issue 26's exported
+   `synthesize_segment(ctx, lang, id)` (cache-aware; overwrites the synth entry) →
+   re-plan **once**; if the re-plan still yields `shorten_candidate`, or the
+   segment was never eligible → overflow handling: apply `atempo_max`, allow
+   overrun into the bleed room, result `warn_overflow` (fitted end colliding with
+   the next segment's start → collision warning with overlap ms).
+   Eligible-and-improved path records result `shortened`; translation doc updated
+   with the shortened text (status stays `draft`), synth doc updated.
 4. Apply decisions with issue 07 primitives only (`atempo`, pad via
    `silence`+`concat` — list-argv subprocesses, no shell, §11.3); all input synth
    paths and fitted outputs resolve through the store registry
@@ -82,7 +87,9 @@ work (24/26 expose `retranslate_segment` / single-segment synth used here), mixi
       property test: fitted duration ≤ available_ms + 1 ms for non-overflow results.
 - [ ] Auto-shorten happy path (mock MT returns shorter text): result `shortened`,
       translation doc updated, synth cache invalidated for that id only.
-- [ ] `edited` segment never auto-shortened (goes straight to overflow when over).
+- [ ] `edited` and `approved` segments are never auto-shortened (both go straight to
+      overflow when over — separate test cases); shorten_budget floor test
+      (char_budget 10 → budget 12).
 - [ ] Atempo'd audio duration matches synth_ms/ratio ±20 ms (media test).
 - [ ] Collision warning fires with correct overlap_ms on a crafted pair.
 - [ ] Report contains every segment id; counts in the completion event match.

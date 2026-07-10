@@ -18,15 +18,20 @@ generated-audio redistribution) is verified here.
 
 ## Scope
 
-In: provider + tests (respx). Out: reference-audio construction (25), consent gate
-enforcement (stage 26 calls it; provider double-checks flag presence).
+In: provider + tests (respx). Out: reference-audio construction (25), consent —
+enforced solely by the synthesize stage (26); this provider performs no consent
+checks.
 
 ## Detailed Requirements
 
-1. Key `ELEVENLABS_API_KEY` via `resolve_api_key`; endpoints: `POST /v1/voices/add`
-   (multipart, name `dubstudio-<voice_hash[:12]>`, description marks it
-   tool-managed), `POST /v1/text-to-speech/{voice_id}` (`output_format=pcm_44100`),
-   `DELETE /v1/voices/{voice_id}`, `GET /v1/user/subscription` (healthcheck).
+1. Key `ELEVENLABS_API_KEY` via `resolve_api_key`; httpx with **TLS verification
+   always on** (no `verify` escape hatch in v1 — §11.2 B2); endpoints:
+   `POST /v1/voices/add` (multipart, name `dubstudio-<voice_hash[:12]>`,
+   description marks it tool-managed), `POST /v1/text-to-speech/{voice_id}`
+   (`output_format=pcm_44100`), `DELETE /v1/voices/{voice_id}`.
+   `healthcheck()`: `GET /v1/user/subscription`, 10 s timeout — 200 → `ok=true`
+   with the tier in `detail`; 401/429/5xx → `ok=false` with the status (no
+   exception from healthcheck).
 2. Config `[tts.elevenlabs]`: `model` default `eleven_multilingual_v2` (allow
    `eleven_v3`), `stability=0.5`, `similarity_boost=0.75`, `style=0.0`.
 3. `capabilities()`: `supports_cloning=True`, `watermark_builtin=False`; the
@@ -44,8 +49,9 @@ enforcement (stage 26 calls it; provider double-checks flag presence).
    checks of its own.
 5. `synthesize(text, voice, language, params)`: request PCM 44.1 kHz output and wrap
    into WAV (`SynthAudio.duration_ms` measured, not trusted from API); texts longer
-   than `max_chars_per_request` → `ProviderError DS-PROVIDER-009` (stage guarantees
-   segment texts are shorter; guard anyway).
+   than `max_chars_per_request` → `RequestTooLarge DS-PROVIDER-009`, non-retryable,
+   message carrying the char count and the limit (stage guarantees segment texts
+   are shorter; guard anyway).
 6. `cleanup_voice(handle)`: DELETE; 404 tolerated (already gone). Called by
    `invalidate --stage synthesize` flow (issue 33 wires it) and never automatically.
 7. Errors (exact mapping, via issue 13's classes and `retry_policy`):
@@ -92,7 +98,8 @@ deletes the voice (documented with subscription-safe tiny usage).
 
 ## Dependencies
 
-13, 07. (Consent is enforced by the synthesize stage, issue 26 — not here.)
+13, 07 — matches the ISSUE_PLAN row. (Consent is enforced by the synthesize stage,
+issue 26 — not here.)
 
 ## Non-goals
 
